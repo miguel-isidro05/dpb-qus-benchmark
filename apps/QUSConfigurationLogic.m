@@ -26,11 +26,13 @@ classdef QUSConfigurationLogic
 
             QUSConfigurationLogic.storeState(app, state);
             QUSConfigurationLogic.updateExecution(app, state);
+            QUSConfigurationLogic.updateStatusSummary(app, state, '');
         end
 
         function onTest(app)
             state = QUSConfigurationLogic.prepare(app);
             QUSConfigurationLogic.updateExecution(app, state);
+            QUSConfigurationLogic.updateStatusSummary(app, state, '');
         end
 
         function onReset(app)
@@ -39,10 +41,8 @@ classdef QUSConfigurationLogic
             state.reference = struct();
             state.queue = QUSConfigurationLogic.emptyQueue();
             QUSConfigurationLogic.storeState(app, state);
-            app.EstadoEditField.Value = 'Sin configuración';
-            app.ArchivoaguardarEditField.Value = '';
-            app.RutadearchivoEditField.Value = '';
             QUSConfigurationLogic.updateExecution(app, state);
+            QUSConfigurationLogic.updateStatusSummary(app, state, 'Sin configuración');
         end
 
         function onSave(app)
@@ -79,10 +79,7 @@ classdef QUSConfigurationLogic
                 return
             end
 
-            app.EstadoEditField.Value = 'Configuración y pipeline guardados';
-            app.ArchivoaguardarEditField.Value = sprintf('%s | %s', ...
-                configurationFileName, pipelineFileName);
-            app.RutadearchivoEditField.Value = outputFolder;
+            QUSConfigurationLogic.updateStatusSummary(app, state, 'Configuración guardada');
         end
 
         function onOpen(app)
@@ -113,9 +110,7 @@ classdef QUSConfigurationLogic
 
             QUSConfigurationLogic.storeState(app, state);
             QUSConfigurationLogic.updateExecution(app, state);
-            app.EstadoEditField.Value = 'Configuración cargada';
-            app.ArchivoaguardarEditField.Value = fileName;
-            app.RutadearchivoEditField.Value = folder;
+            QUSConfigurationLogic.updateStatusSummary(app, state, 'Configuración cargada');
         end
 
         function openMediumSettings(app)
@@ -214,34 +209,74 @@ classdef QUSConfigurationLogic
 
         function openSensorSettings(app)
             state = QUSConfigurationLogic.prepare(app);
-            settings = state.advanced.sensor;
-            dialog = QUSConfigurationLogic.settingsDialog('Sensor: configuración de recepción');
+            settings = QUSConfigurationLogic.normalizeSensorSettings(state.advanced.sensor);
+            sensorType = char(string(app.TipoDropDown_2.Value));
+            dialog = QUSConfigurationLogic.settingsDialog(['Sensor: ', sensorType]);
             tabs = uitabgroup(dialog, 'Position', [15 55 490 285]);
-            receiveTab = uitab(tabs, 'Title', 'Recepción');
-            receiveGrid = uigridlayout(receiveTab, [4 2]);
-            receiveGrid.ColumnWidth = {'1x', '1x'};
-            sharedArray = QUSConfigurationLogic.checkBoxField(receiveGrid, 1, ...
-                'Usar el mismo kWaveArray para recibir', settings.shared_array);
-            directivityFactor = QUSConfigurationLogic.numericField(receiveGrid, 2, ...
-                'Factor de directividad × dx', settings.directivity_size_factor);
-            directivityAngle = QUSConfigurationLogic.numericField(receiveGrid, 3, ...
-                'Ángulo de directividad [rad]', settings.directivity_angle);
-            note = uilabel(receiveGrid, 'Text', ...
-                'El sensor registra canales RF antes del beamforming.');
-            note.Layout.Row = 4;
-            note.Layout.Column = [1 2];
+
+            variablesTab = uitab(tabs, 'Title', 'Variables a guardar');
+            variablesGrid = uigridlayout(variablesTab, [5 2]);
+            variablesGrid.ColumnWidth = {'1x', '1x'};
+            pressure = QUSConfigurationLogic.checkBoxField(variablesGrid, 1, ...
+                'Presión instantánea (p)', settings.record_pressure);
+            rmsPressure = QUSConfigurationLogic.checkBoxField(variablesGrid, 2, ...
+                'Presión RMS (p_rms)', settings.record_rms);
+            peakPressure = QUSConfigurationLogic.checkBoxField(variablesGrid, 3, ...
+                'Presión máxima (p_max)', settings.record_peak);
+            variableNote = uilabel(variablesGrid, 'Text', ...
+                'Selecciona al menos una variable. El resumen se mostrará en el panel Sensor.');
+            variableNote.WordWrap = 'on';
+            variableNote.Layout.Row = [4 5];
+            variableNote.Layout.Column = [1 2];
+
+            if strcmp(sensorType, 'Transductor emisor')
+                receiveTab = uitab(tabs, 'Title', 'Recepción');
+                receiveGrid = uigridlayout(receiveTab, [4 2]);
+                receiveGrid.ColumnWidth = {'1x', '1x'};
+                sharedArray = QUSConfigurationLogic.checkBoxField(receiveGrid, 1, ...
+                    'Usar el mismo kWaveArray para recibir', settings.shared_array);
+                directivityFactor = QUSConfigurationLogic.numericField(receiveGrid, 2, ...
+                    'Factor de directividad × dx', settings.directivity_size_factor);
+                directivityAngle = QUSConfigurationLogic.numericField(receiveGrid, 3, ...
+                    'Ángulo de directividad [rad]', settings.directivity_angle);
+                note = uilabel(receiveGrid, 'Text', ...
+                    'El sensor usa la geometría del transductor emisor.');
+                note.Layout.Row = 4;
+                note.Layout.Column = [1 2];
+            else
+                configurationTab = uitab(tabs, 'Title', sensorType);
+                configurationGrid = uigridlayout(configurationTab, [2 1]);
+                configurationGrid.RowHeight = {'fit', '1x'};
+                message = uilabel(configurationGrid, 'Text', ...
+                    'El plano y su posición se definen en el panel principal de Sensor.');
+                message.WordWrap = 'on';
+                message.Layout.Row = 1;
+            end
             QUSConfigurationLogic.dialogButtons(dialog, @applySettings);
 
             function applySettings(~, ~)
-                if directivityFactor.Value <= 0 || ~isfinite(directivityAngle.Value)
-                    uialert(dialog, 'El factor y el ángulo de directividad no son válidos.', ...
-                        'Valores inválidos');
+                if ~pressure.Value && ~rmsPressure.Value && ~peakPressure.Value
+                    uialert(dialog, 'Selecciona al menos una variable para guardar.', ...
+                        'Variables requeridas');
                     return
                 end
-                state.advanced.sensor = struct( ...
-                    'shared_array', sharedArray.Value, ...
-                    'directivity_size_factor', directivityFactor.Value, ...
-                    'directivity_angle', directivityAngle.Value);
+                settings.record_pressure = pressure.Value;
+                settings.record_rms = rmsPressure.Value;
+                settings.record_peak = peakPressure.Value;
+
+                if strcmp(sensorType, 'Transductor emisor')
+                    if directivityFactor.Value <= 0 || ~isfinite(directivityAngle.Value)
+                        uialert(dialog, 'El factor y el ángulo de directividad no son válidos.', ...
+                            'Valores inválidos');
+                        return
+                    end
+                    settings.shared_array = sharedArray.Value;
+                    settings.directivity_size_factor = directivityFactor.Value;
+                    settings.directivity_angle = directivityAngle.Value;
+                end
+
+                state.advanced.sensor = settings;
+                QUSConfigurationLogic.setSensorVariablesSummary(app, settings);
                 QUSConfigurationLogic.storeState(app, state);
                 delete(dialog);
             end
@@ -344,13 +379,43 @@ classdef QUSConfigurationLogic
                 'n_lines', 128, 'base_translation_x', -2.7e-2, ...
                 'base_translation_y', 0, 'rotation', 0);
             settings.sensor = struct('shared_array', true, 'directivity_size_factor', 10, ...
-                'directivity_angle', 0);
+                'directivity_angle', 0, 'record_pressure', true, ...
+                'record_rms', true, 'record_peak', true);
             settings.computation = struct('grid_size_y', 4e-2, 'pml_size_y', 41, ...
                 'data_cast', 'gpuArray-single', 'plot_sim_flag', false);
             settings.reproducibility = struct('rng_seed', 23, 'ref_seed_base', 50000, ...
                 'n_refs_target', 5, 'n_refs_reference', 10);
             settings.output = struct('save_medium_previews', true, ...
                 'save_rf_prebeamformed', true);
+        end
+
+        function settings = normalizeSensorSettings(settings)
+            defaults = QUSConfigurationLogic.defaultAdvancedSettings();
+            defaultSensor = defaults.sensor;
+            fields = fieldnames(defaultSensor);
+            for index = 1:numel(fields)
+                fieldName = fields{index};
+                if ~isfield(settings, fieldName)
+                    settings.(fieldName) = defaultSensor.(fieldName);
+                end
+            end
+        end
+
+        function setSensorVariablesSummary(app, settings)
+            variables = {};
+            if settings.record_pressure
+                variables{end + 1} = 'p';
+            end
+            if settings.record_rms
+                variables{end + 1} = 'p_rms';
+            end
+            if settings.record_peak
+                variables{end + 1} = 'p_max';
+            end
+
+            summary = strjoin(variables, ', ');
+            app.VariablesDropDown.Items = {summary};
+            app.VariablesDropDown.Value = summary;
         end
 
         function applyDefaults(app)
@@ -375,6 +440,7 @@ classdef QUSConfigurationLogic
         end
 
         function configuration = readCurrentConfiguration(app, advanced)
+            advanced.sensor = QUSConfigurationLogic.normalizeSensorSettings(advanced.sensor);
             configuration.geometry = struct('grid_size_x', app.DimensionesEditField.Value, ...
                 'grid_size_y', advanced.computation.grid_size_y, 'ppw', app.ResolucinEditField.Value, ...
                 'pml_size_x', app.PMLCantcapasEditField.Value, ...
@@ -398,7 +464,10 @@ classdef QUSConfigurationLogic
                 'plane', char(app.PlanoDropDown.Value), 'plane_position', char(app.PosicindelplanoDropDown.Value), ...
                 'variables', char(app.VariablesDropDown.Value), 'shared_array', advanced.sensor.shared_array, ...
                 'directivity_size_factor', advanced.sensor.directivity_size_factor, ...
-                'directivity_angle', advanced.sensor.directivity_angle);
+                'directivity_angle', advanced.sensor.directivity_angle, ...
+                'record_pressure', advanced.sensor.record_pressure, ...
+                'record_rms', advanced.sensor.record_rms, ...
+                'record_peak', advanced.sensor.record_peak);
             configuration.computation = struct('data_cast', advanced.computation.data_cast, ...
                 'plot_sim_flag', advanced.computation.plot_sim_flag, ...
                 'solver', char(app.SolverDropDown.Value), 'dt_mode', char(app.dtDropDown.Value));
@@ -508,6 +577,35 @@ classdef QUSConfigurationLogic
             app.EstadoEditField.Value = sprintf('Referencia + %d sección(es)', numel(sections));
         end
 
+        function updateStatusSummary(app, state, statusText)
+            if isempty(statusText)
+                if state.referenceDefined
+                    if isempty(state.queue)
+                        statusText = 'Referencia definida';
+                    else
+                        statusText = 'Listo para ejecutar';
+                    end
+                else
+                    statusText = 'Sin configuración';
+                end
+            end
+
+            app.EstadoEditField.Value = statusText;
+            app.ModoEditField.Value = 'Local';
+
+            if state.referenceDefined
+                if isempty(state.queue)
+                    app.ConfiguracinEditField.Value = 'Referencia definida';
+                else
+                    app.ConfiguracinEditField.Value = 'Referencia + cambios';
+                end
+            else
+                app.ConfiguracinEditField.Value = 'Sin referencia';
+            end
+
+            app.CambiosencolaEditField.Value = num2str(numel(state.queue));
+        end
+
         function lines = appendReference(lines, reference)
             items = QUSConfigurationLogic.records(reference);
             sections = unique(string({items.section}), 'stable');
@@ -525,6 +623,7 @@ classdef QUSConfigurationLogic
         end
 
         function items = records(configuration)
+            configuration.sensor = QUSConfigurationLogic.normalizeSensorSettings(configuration.sensor);
             items = struct('section', {}, 'parameter', {}, 'value', {});
             add = @(section, parameter, value) struct('section', section, 'parameter', parameter, 'value', value);
             items(end + 1) = add('Geometría y malla', 'Tamaño axial [m]', configuration.geometry.grid_size_x);
@@ -564,6 +663,9 @@ classdef QUSConfigurationLogic
             items(end + 1) = add('Sensor', 'Arreglo compartido', configuration.sensor.shared_array);
             items(end + 1) = add('Sensor', 'Factor de directividad', configuration.sensor.directivity_size_factor);
             items(end + 1) = add('Sensor', 'Ángulo de directividad [rad]', configuration.sensor.directivity_angle);
+            items(end + 1) = add('Sensor', 'Guardar p', configuration.sensor.record_pressure);
+            items(end + 1) = add('Sensor', 'Guardar p_rms', configuration.sensor.record_rms);
+            items(end + 1) = add('Sensor', 'Guardar p_max', configuration.sensor.record_peak);
             items(end + 1) = add('Cálculo', 'DataCast', string(configuration.computation.data_cast));
             items(end + 1) = add('Cálculo', 'PlotSim', configuration.computation.plot_sim_flag);
             items(end + 1) = add('Cálculo', 'Solver', string(configuration.computation.solver));
@@ -610,9 +712,7 @@ classdef QUSConfigurationLogic
                 'alpha_mode', reference.medium.alpha_mode, 'sound_speed_ref', reference.medium.sound_speed_ref);
             advanced.transducer = rmfield(reference.transducer, ...
                 {'type', 'signal', 'beam_mode', 'frequency', 'amplitude', 'cycles'});
-            advanced.sensor = struct('shared_array', reference.sensor.shared_array, ...
-                'directivity_size_factor', reference.sensor.directivity_size_factor, ...
-                'directivity_angle', reference.sensor.directivity_angle);
+            advanced.sensor = QUSConfigurationLogic.normalizeSensorSettings(reference.sensor);
             advanced.computation = struct('grid_size_y', reference.geometry.grid_size_y, ...
                 'pml_size_y', reference.geometry.pml_size_y, ...
                 'data_cast', reference.computation.data_cast, ...
@@ -637,6 +737,7 @@ classdef QUSConfigurationLogic
             app.AmplitudEditField_2.Value = configuration.transducer.amplitude;
             app.NciclosEditField.Value = configuration.transducer.cycles;
             QUSConfigurationLogic.setDropDown(app.TipoDropDown_2, configuration.sensor.type);
+            SensorPanelLogic.updateForSensorType(app);
             QUSConfigurationLogic.setDropDown(app.PlanoDropDown, configuration.sensor.plane);
             QUSConfigurationLogic.setDropDown(app.PosicindelplanoDropDown, configuration.sensor.plane_position);
             QUSConfigurationLogic.setDropDown(app.VariablesDropDown, configuration.sensor.variables);
@@ -663,7 +764,6 @@ classdef QUSConfigurationLogic
 
             lines = [ ...
                 "%% Homogeneous reference simulations"; "clearvars"; "clc"; ""; ...
-                "parallel.gpu.enableCUDAForwardCompatibility(true)"; ""; ...
                 "%% Reproducibility"; ...
                 "rng(" + QUSConfigurationLogic.matlabLiteral(reference.reproducibility.rng_seed) + ")"; ...
                 "addpath(genpath(pwd))"; ""; ...
@@ -729,6 +829,9 @@ classdef QUSConfigurationLogic
                 "    rotation = caseConfiguration.transducer.rotation;"; ""; ...
                 "    %% Computational parameters"; ""; ...
                 "    DATA_CAST = caseConfiguration.computation.data_cast;          % 'single' or 'gpuArray-single'"; ...
+                "    if startsWith(DATA_CAST, 'gpuArray')"; ...
+                "        parallel.gpu.enableCUDAForwardCompatibility(true)"; ...
+                "    end"; ...
                 "    ppw = caseConfiguration.geometry.ppw;                         % points per wavelength"; ...
                 "    depth = caseConfiguration.geometry.depth;                     % imaging depth [m]"; ...
                 "    cfl = caseConfiguration.geometry.cfl;                         % CFL number"; ...

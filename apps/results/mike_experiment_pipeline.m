@@ -20,7 +20,7 @@ referenceConfiguration.geometry.depth = 0.055;
 referenceConfiguration.medium.model = 'Homogeneo';
 referenceConfiguration.medium.sound_speed = 1540;
 referenceConfiguration.medium.density = 1000;
-referenceConfiguration.medium.hom_alpha = 0.524;
+referenceConfiguration.medium.hom_alpha = 0.53;
 referenceConfiguration.medium.density_std = 0.04;
 referenceConfiguration.medium.alpha_power = 1;
 referenceConfiguration.medium.alpha_mode = 'no_dispersion';
@@ -47,17 +47,17 @@ referenceConfiguration.sensor.variables = 'p_mrs, p_max';
 referenceConfiguration.sensor.shared_array = true;
 referenceConfiguration.sensor.directivity_size_factor = 10;
 referenceConfiguration.sensor.directivity_angle = 0;
-referenceConfiguration.computation.data_cast = 'gpuArray-single';
+referenceConfiguration.computation.data_cast = 'single'; %aqui cambiar
 referenceConfiguration.computation.plot_sim_flag = false;
 referenceConfiguration.computation.solver = 'kspaceFirstoOrder2D';
 referenceConfiguration.computation.dt_mode = 'automatico';
 referenceConfiguration.reproducibility.rng_seed = 23;
 referenceConfiguration.reproducibility.ref_seed_base = 50000;
-referenceConfiguration.reproducibility.n_refs_target = 5;
-referenceConfiguration.reproducibility.n_refs_reference = 10;
+referenceConfiguration.reproducibility.n_refs_target = 1;
+referenceConfiguration.reproducibility.n_refs_reference = 5;
 referenceConfiguration.output.save_medium_previews = true;
 referenceConfiguration.output.save_rf_prebeamformed = true;
-referenceConfiguration.experiment.name = 'homogeneous_benchmark';
+referenceConfiguration.experiment.name = 'mike_experiment';
 
 variationPlan = struct('path', {}, 'values', {}, 'reference', {}, 'label', {});
 
@@ -117,7 +117,7 @@ for ii = 1:numel(experimentCases)
     %% Computational parameters
 
     DATA_CAST = caseConfiguration.computation.data_cast;          % 'single' or 'gpuArray-single'
-    if startsWith(DATA_CAST, 'gpuArray')
+    if startsWith(DATA_CAST, 'gpuArray-single')
         parallel.gpu.enableCUDAForwardCompatibility(true)
     end
     ppw = caseConfiguration.geometry.ppw;                         % points per wavelength
