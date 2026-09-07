@@ -17,6 +17,8 @@ classdef ProjectExplorerLogic
 
             ProjectExplorerLogic.configureFileActions(app);
             ProjectExplorerLogic.setCurrentFolder(app, rootFolder);
+            ProjectExplorerLogic.setOutputParentFolder(app, ...
+                ProjectExplorerLogic.defaultOutputParentFolder(rootFolder));
             setappdata(app.UIFigure, 'ProjectExplorerHistory', {});
             ProjectExplorerLogic.updateCurrentExperiment(app);
             ProjectExplorerLogic.refreshTree(app);
@@ -30,12 +32,14 @@ classdef ProjectExplorerLogic
             end
 
             app.ExperimentoActualEditField.Value = experimentName;
-            rootFolder = ProjectExplorerLogic.getRepositoryRoot(app);
-            if isempty(rootFolder)
+            outputParentFolder = ProjectExplorerLogic.getOutputParentFolder(app);
+            if isempty(outputParentFolder)
                 return
             end
 
-            app.RutadesalidaEditField.Value = fullfile('results', experimentName);
+            app.RutadesalidaEditField.Value = fullfile( ...
+                ProjectExplorerLogic.outputParentLabel(outputParentFolder), ...
+                ProjectExplorerLogic.safeOutputName(experimentName));
         end
 
         function refreshTree(app)
@@ -81,9 +85,14 @@ classdef ProjectExplorerLogic
 
         function openSelectedFolder(app)
             selectedPath = ProjectExplorerLogic.getSelectedPath(app);
-            if isempty(selectedPath)
-                selectedPath = fullfile(ProjectExplorerLogic.getRepositoryRoot(app), ...
-                    char(string(app.RutadesalidaEditField.Value)));
+            % El sistema de archivos puede cambiar fuera de MATLAB. Antes de
+            % abrir, sincronizamos el árbol y conservamos la ruta elegida.
+            ProjectExplorerLogic.refreshTree(app);
+
+            if isempty(selectedPath) || ~isfile(selectedPath) && ~isfolder(selectedPath)
+                % Sin selección, abrir la carpeta visible evita apuntar a una
+                % salida que todavía no existe.
+                selectedPath = ProjectExplorerLogic.getCurrentFolder(app);
             end
 
             if isfile(selectedPath)
@@ -107,6 +116,31 @@ classdef ProjectExplorerLogic
         function showSelectedPathAsTooltip(app)
             selectedPath = ProjectExplorerLogic.getSelectedPath(app);
             app.RutadesalidaEditField.Tooltip = selectedPath;
+            ProjectExplorerLogic.setOutputParentFromSelection(app, selectedPath);
+        end
+
+        function selectExperimentOutputFolder(app)
+            % Tras guardar, deja sombreada la carpeta que contiene los
+            % archivos del experimento para confirmar visualmente el destino.
+            experimentName = strtrim(char(string(app.NombreEditField.Value)));
+            outputPath = fullfile(ProjectExplorerLogic.getOutputParentFolder(app), ...
+                ProjectExplorerLogic.safeOutputName(experimentName));
+            if ~isfolder(outputPath)
+                return
+            end
+
+            ProjectExplorerLogic.refreshTree(app);
+            rootNode = app.Tree.Children(1);
+            ProjectExplorerLogic.selectPath(app, rootNode, outputPath);
+        end
+
+        function outputParentFolder = getOutputParentFolder(app)
+            outputParentFolder = getappdata(app.UIFigure, 'ProjectExplorerOutputParentFolder');
+            if isempty(outputParentFolder) || ~isfolder(outputParentFolder)
+                outputParentFolder = ProjectExplorerLogic.defaultOutputParentFolder( ...
+                    ProjectExplorerLogic.getRepositoryRoot(app));
+                ProjectExplorerLogic.setOutputParentFolder(app, outputParentFolder);
+            end
         end
 
         function refreshAfterSave(app)
@@ -129,6 +163,33 @@ classdef ProjectExplorerLogic
             if isfolder(selectedPath)
                 ProjectExplorerLogic.navigateToFolder(app, selectedPath);
                 ProjectExplorerLogic.refreshTree(app);
+            end
+        end
+
+        function useSelectionAsTreeRoot(app)
+            % Limita el árbol a la carpeta seleccionada. La carpeta anterior
+            % queda guardada para poder recuperarla con el botón Atrás.
+            selectedPath = ProjectExplorerLogic.getSelectedPath(app);
+            if isempty(selectedPath) || ~isfolder(selectedPath)
+                ProjectExplorerLogic.showError(app, ...
+                    'Selecciona una carpeta para usarla como raíz del árbol.');
+                return
+            end
+
+            ProjectExplorerLogic.navigateToFolder(app, selectedPath);
+            ProjectExplorerLogic.refreshTree(app);
+        end
+
+        function selectContextNode(app, event)
+            % Selecciona el nodo bajo el cursor antes de ejecutar la opción
+            % elegida en el menú contextual.
+            try
+                clickedNode = event.InteractionInformation.Node;
+                if ~isempty(clickedNode)
+                    app.Tree.SelectedNodes = clickedNode;
+                end
+            catch
+                % En versiones anteriores se conserva el nodo seleccionado.
             end
         end
 
@@ -321,6 +382,10 @@ classdef ProjectExplorerLogic
                 @(~, ~) ProjectExplorerLogic.cutSelection(app));
             uimenu(contextMenu, 'Text', 'Pegar', 'Separator', 'on', 'MenuSelectedFcn', ...
                 @(~, ~) ProjectExplorerLogic.pasteSelection(app));
+            uimenu(contextMenu, 'Text', 'Actualizar árbol', 'Separator', 'on', ...
+                'MenuSelectedFcn', @(~, ~) ProjectExplorerLogic.refreshTree(app));
+            uimenu(contextMenu, 'Text', 'Usar como raíz del árbol', 'Separator', 'on', ...
+                'MenuSelectedFcn', @(~, ~) ProjectExplorerLogic.useSelectionAsTreeRoot(app));
             uimenu(contextMenu, 'Text', 'Atrás', 'MenuSelectedFcn', ...
                 @(~, ~) ProjectExplorerLogic.goBack(app));
             uimenu(contextMenu, 'Text', 'Renombrar', 'Separator', 'on', 'MenuSelectedFcn', ...
@@ -334,18 +399,6 @@ classdef ProjectExplorerLogic
                 ProjectExplorerLogic.selectContextNode(app, event);
             setappdata(app.UIFigure, 'ProjectExplorerContextMenu', contextMenu);
             ProjectExplorerLogic.clearFileClipboard(app);
-        end
-
-        function selectContextNode(app, event)
-            % R2023b+ informa el nodo bajo el cursor antes de abrir el menú.
-            % En versiones anteriores MATLAB conserva el nodo ya seleccionado.
-            try
-                clickedNode = event.InteractionInformation.Node;
-                if ~isempty(clickedNode)
-                    app.Tree.SelectedNodes = clickedNode;
-                end
-            catch
-            end
         end
 
         function confirmDelete(app, sourcePath, selectedOption)
@@ -556,6 +609,47 @@ classdef ProjectExplorerLogic
             nodeData = app.Tree.SelectedNodes(1).NodeData;
             if ~isempty(nodeData)
                 selectedPath = char(string(nodeData));
+            end
+        end
+
+        function setOutputParentFromSelection(app, selectedPath)
+            if isempty(selectedPath)
+                return
+            end
+            if isfile(selectedPath)
+                selectedPath = fileparts(selectedPath);
+            end
+            if isfolder(selectedPath)
+                ProjectExplorerLogic.setOutputParentFolder(app, selectedPath);
+                ProjectExplorerLogic.updateCurrentExperiment(app);
+            end
+        end
+
+        function setOutputParentFolder(app, folderPath)
+            setappdata(app.UIFigure, 'ProjectExplorerOutputParentFolder', ...
+                ProjectExplorerLogic.normalizeFolderPath(folderPath));
+        end
+
+        function folderPath = defaultOutputParentFolder(repositoryRoot)
+            candidate = fullfile(repositoryRoot, 'apps', 'results');
+            if isfolder(candidate)
+                folderPath = candidate;
+            else
+                folderPath = repositoryRoot;
+            end
+        end
+
+        function label = outputParentLabel(folderPath)
+            [~, label] = fileparts(ProjectExplorerLogic.normalizeFolderPath(folderPath));
+            if isempty(label)
+                label = 'resultados';
+            end
+        end
+
+        function name = safeOutputName(name)
+            name = regexprep(char(string(name)), '[^A-Za-z0-9_-]', '_');
+            if isempty(name)
+                name = 'EX-001';
             end
         end
 

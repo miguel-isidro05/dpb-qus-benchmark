@@ -1,6 +1,7 @@
 classdef QUSConfigurationLogic
     % QUSConfigurationLogic
-    % Lógica de configuración reproducible para App_v1. No ejecuta k-Wave.
+    % Gestiona la configuración reproducible compartida por las apps.
+    % Prepara y guarda los datos, pero no ejecuta k-Wave.
 
     methods (Static)
         function onSet(app)
@@ -24,15 +25,18 @@ classdef QUSConfigurationLogic
                 end
             end
 
+            state.advanced.reproducibility = current.reproducibility;
             QUSConfigurationLogic.storeState(app, state);
             QUSConfigurationLogic.updateExecution(app, state);
             QUSConfigurationLogic.updateStatusSummary(app, state, '');
+            QUSConfigurationLogic.refreshAssociatedViews(app);
         end
 
         function onTest(app)
             state = QUSConfigurationLogic.prepare(app);
             QUSConfigurationLogic.updateExecution(app, state);
             QUSConfigurationLogic.updateStatusSummary(app, state, '');
+            QUSConfigurationLogic.refreshAssociatedViews(app);
         end
 
         function onReset(app)
@@ -43,14 +47,29 @@ classdef QUSConfigurationLogic
             QUSConfigurationLogic.storeState(app, state);
             QUSConfigurationLogic.updateExecution(app, state);
             QUSConfigurationLogic.updateStatusSummary(app, state, 'Sin configuración');
+            QUSConfigurationLogic.refreshAssociatedViews(app);
         end
 
         function onSave(app)
             state = QUSConfigurationLogic.prepare(app);
-            if ~state.referenceDefined
-                QUSConfigurationLogic.showError(app, ...
-                    'Primero pulsa Set para guardar la configuración de referencia.');
+            try
+                current = QUSConfigurationLogic.readCurrentConfiguration(app, state.advanced);
+                QUSConfigurationLogic.validateConfiguration(current);
+            catch exception
+                QUSConfigurationLogic.showError(app, exception.message);
                 return
+            end
+
+            if ~state.referenceDefined || ...
+                    ~strcmp(state.reference.experiment.name, current.experiment.name)
+                % Un nombre nuevo representa otro experimento. Parte de su
+                % propia referencia y no hereda cambios en cola del anterior.
+                state.reference = current;
+                state.referenceDefined = true;
+                state.queue = QUSConfigurationLogic.emptyQueue();
+                state.advanced.reproducibility = current.reproducibility;
+                QUSConfigurationLogic.storeState(app, state);
+                QUSConfigurationLogic.updateExecution(app, state);
             end
 
             configuration = struct( ...
@@ -61,11 +80,11 @@ classdef QUSConfigurationLogic
                 'description', ['Configuración reproducible. No contiene RF ni resultados ' ...
                     'de k-Wave.']);
 
-            outputFolder = QUSConfigurationLogic.resultsFolder();
+            fileStem = QUSConfigurationLogic.safeFileName(state.reference.experiment.name);
+            outputFolder = QUSConfigurationLogic.resultsFolder(app, fileStem);
             if ~exist(outputFolder, 'dir')
                 mkdir(outputFolder);
             end
-            fileStem = QUSConfigurationLogic.safeFileName(state.reference.experiment.name);
             configurationFileName = [fileStem, '_configuration.mat'];
             pipelineFileName = [fileStem, '_pipeline.m'];
             configurationPath = fullfile(outputFolder, configurationFileName);
@@ -73,13 +92,17 @@ classdef QUSConfigurationLogic
 
             try
                 save(configurationPath, 'configuration');
-                QUSConfigurationLogic.writePipelineScript(pipelinePath, configuration);
+                QUSConfigurationLogic.writePipelineScript(pipelinePath, configurationPath, configuration);
             catch exception
                 QUSConfigurationLogic.showError(app, exception.message);
                 return
             end
 
             QUSConfigurationLogic.updateStatusSummary(app, state, 'Configuración guardada');
+            QUSConfigurationLogic.refreshAssociatedViews(app);
+            if isprop(app, 'Tree') && isprop(app, 'NombreEditField')
+                ProjectExplorerLogic.selectExperimentOutputFolder(app);
+            end
         end
 
         function onOpen(app)
@@ -111,6 +134,7 @@ classdef QUSConfigurationLogic
             QUSConfigurationLogic.storeState(app, state);
             QUSConfigurationLogic.updateExecution(app, state);
             QUSConfigurationLogic.updateStatusSummary(app, state, 'Configuración cargada');
+            QUSConfigurationLogic.refreshAssociatedViews(app);
         end
 
         function openMediumSettings(app)
@@ -152,6 +176,7 @@ classdef QUSConfigurationLogic
                     'alpha_mode', alphaMode.Value, ...
                     'sound_speed_ref', cReference.Value);
                 QUSConfigurationLogic.storeState(app, state);
+                QUSConfigurationLogic.refreshPreviewIfAvailable(app);
                 delete(dialog);
             end
         end
@@ -203,6 +228,7 @@ classdef QUSConfigurationLogic
                     'base_translation_y', baseY.Value, ...
                     'rotation', rotation.Value);
                 QUSConfigurationLogic.storeState(app, state);
+                QUSConfigurationLogic.refreshPreviewIfAvailable(app);
                 delete(dialog);
             end
         end
@@ -278,6 +304,7 @@ classdef QUSConfigurationLogic
                 state.advanced.sensor = settings;
                 QUSConfigurationLogic.setSensorVariablesSummary(app, settings);
                 QUSConfigurationLogic.storeState(app, state);
+                QUSConfigurationLogic.refreshPreviewIfAvailable(app);
                 delete(dialog);
             end
         end
@@ -286,6 +313,7 @@ classdef QUSConfigurationLogic
             state = QUSConfigurationLogic.prepare(app);
             computation = state.advanced.computation;
             reproducibility = state.advanced.reproducibility;
+            reproducibility = QUSConfigurationLogic.readRealizationControls(app, reproducibility);
             output = state.advanced.output;
             dialog = QUSConfigurationLogic.settingsDialog('Pipeline: cálculo, reproducibilidad y salida');
             tabs = uitabgroup(dialog, 'Position', [15 55 490 285]);
@@ -337,7 +365,9 @@ classdef QUSConfigurationLogic
                 state.advanced.output = struct( ...
                     'save_medium_previews', saveMedium.Value, ...
                     'save_rf_prebeamformed', saveRf.Value);
+                QUSConfigurationLogic.configureRealizationControls(app, state.advanced.reproducibility);
                 QUSConfigurationLogic.storeState(app, state);
+                QUSConfigurationLogic.refreshPreviewIfAvailable(app);
                 delete(dialog);
             end
         end
@@ -436,7 +466,60 @@ classdef QUSConfigurationLogic
             app.NombreEditField.Value = 'homogeneous_benchmark';
             app.TiempoEditField.Value = 5.5e-2;
             QUSConfigurationLogic.setDropDown(app.SolverDropDown, 'kspaceFirstoOrder2D');
+            defaults = QUSConfigurationLogic.defaultAdvancedSettings();
+            QUSConfigurationLogic.configureRealizationControls(app, defaults.reproducibility);
             app.EstadoEditField.Value = 'Sin configuración';
+        end
+
+        function configureRealizationControls(app, reproducibility)
+            % Estos controles aplican a todos los casos de la cola. El último
+            % caso de referencia usa el segundo valor, igual que el pipeline.
+            if isprop(app, 'nRefsSpinner')
+                targetControl = app.nRefsSpinner;
+                targetLabel = app.nRefsSpinnerLabel;
+            elseif isprop(app, 'Spinner')
+                targetControl = app.Spinner;
+                targetLabel = app.SpinnerLabel;
+            else
+                return
+            end
+
+            if ~isprop(app, 'Spinner2')
+                return
+            end
+            referenceControl = app.Spinner2;
+            targetLabel.Text = 'Número de realizaciones';
+
+            referenceLabel = findall(app.GridLayout16, 'Type', 'uilabel', ...
+                'Tag', 'ReferenceRealizationsLabel');
+            if isempty(referenceLabel)
+                referenceLabel = uilabel(app.GridLayout16, ...
+                    'Tag', 'ReferenceRealizationsLabel', ...
+                    'HorizontalAlignment', 'right');
+                referenceLabel.Layout.Row = 2;
+                referenceLabel.Layout.Column = 1;
+            end
+            referenceLabel.Text = 'Realizaciones de referencia';
+
+            controls = {targetControl, referenceControl};
+            values = [reproducibility.n_refs_target, reproducibility.n_refs_reference];
+            for index = 1:numel(controls)
+                controls{index}.Limits = [1 Inf];
+                controls{index}.Step = 1;
+                controls{index}.RoundFractionalValues = 'on';
+                controls{index}.Value = max(1, round(values(index)));
+            end
+        end
+
+        function reproducibility = readRealizationControls(app, reproducibility)
+            if isprop(app, 'nRefsSpinner')
+                reproducibility.n_refs_target = app.nRefsSpinner.Value;
+            elseif isprop(app, 'Spinner')
+                reproducibility.n_refs_target = app.Spinner.Value;
+            end
+            if isprop(app, 'Spinner2')
+                reproducibility.n_refs_reference = app.Spinner2.Value;
+            end
         end
 
         function configuration = readCurrentConfiguration(app, advanced)
@@ -471,7 +554,9 @@ classdef QUSConfigurationLogic
             configuration.computation = struct('data_cast', advanced.computation.data_cast, ...
                 'plot_sim_flag', advanced.computation.plot_sim_flag, ...
                 'solver', char(app.SolverDropDown.Value), 'dt_mode', char(app.dtDropDown.Value));
-            configuration.reproducibility = advanced.reproducibility;
+            reproducibility = QUSConfigurationLogic.readRealizationControls( ...
+                app, advanced.reproducibility);
+            configuration.reproducibility = reproducibility;
             configuration.output = advanced.output;
             configuration.experiment = struct('name', char(app.NombreEditField.Value));
         end
@@ -604,6 +689,23 @@ classdef QUSConfigurationLogic
             end
 
             app.CambiosencolaEditField.Value = num2str(numel(state.queue));
+        end
+
+        function refreshPreviewIfAvailable(app)
+            PreviewLogic.refreshIfAvailable(app);
+        end
+
+        function refreshAssociatedViews(app)
+            % Mantiene sincronizados nombre, ruta de salida, árbol y preview
+            % después de cualquier acción que cambie la configuración.
+            if isprop(app, 'Tree') && isprop(app, 'NombreEditField') && ...
+                    isprop(app, 'RepositorioEditField') && ...
+                    isprop(app, 'ExperimentoActualEditField') && ...
+                    isprop(app, 'RutadesalidaEditField')
+                ProjectExplorerLogic.updateCurrentExperiment(app);
+                ProjectExplorerLogic.refreshTree(app);
+            end
+            QUSConfigurationLogic.refreshPreviewIfAvailable(app);
         end
 
         function lines = appendReference(lines, reference)
@@ -744,6 +846,7 @@ classdef QUSConfigurationLogic
             QUSConfigurationLogic.setDropDown(app.SolverDropDown, configuration.computation.solver);
             QUSConfigurationLogic.setDropDown(app.dtDropDown, configuration.computation.dt_mode);
             app.NombreEditField.Value = configuration.experiment.name;
+            QUSConfigurationLogic.configureRealizationControls(app, configuration.reproducibility);
         end
 
         function setDropDown(control, value)
@@ -753,9 +856,9 @@ classdef QUSConfigurationLogic
             end
         end
 
-        function writePipelineScript(pipelinePath, configuration)
-            % Crea un script autocontenido. La cola se convierte en casos de
-            % simulación y la referencia siempre queda como el último caso.
+        function writePipelineScript(pipelinePath, configurationPath, configuration)
+            % El script usa el .mat guardado por la GUI como fuente de datos.
+            % Después convierte cada dato a las variables del pipeline original.
             reference = configuration.reference;
             if ~strcmpi(reference.medium.model, 'Homogeneo')
                 error(['El generador actual crea el pipeline homogéneo de k-Wave. ' ...
@@ -767,13 +870,18 @@ classdef QUSConfigurationLogic
                 "%% Reproducibility"; ...
                 "rng(" + QUSConfigurationLogic.matlabLiteral(reference.reproducibility.rng_seed) + ")"; ...
                 "addpath(genpath(pwd))"; ""; ...
-                "%% Output setup"; ...
-                "% This configuration was generated by App_v1."; ...
-                "% Target values come from the GUI queue; the reference is the final case."; ...
-                "referenceConfiguration = struct();"];
-
-            lines = [lines; QUSConfigurationLogic.referenceAssignmentLines(reference)];
-            lines = [lines; ""; "variationPlan = struct('path', {}, 'values', {}, 'reference', {}, 'label', {});"];
+                "%% Configuración de la GUI"; ...
+                "% El .mat se guarda junto a este pipeline cuando se pulsa Save."; ...
+                "configurationFile = fullfile(fileparts(mfilename('fullpath')), '" + ...
+                    QUSConfigurationLogic.escapeMatlabText(QUSConfigurationLogic.getFileName(configurationPath)) + "');"; ...
+                "if ~isfile(configurationFile)"; ...
+                "    error('No se encontró la configuración generada por la GUI: %s', configurationFile);"; ...
+                "end"; ...
+                "loadedConfiguration = load(configurationFile, 'configuration');"; ...
+                "referenceConfiguration = loadedConfiguration.configuration.reference;"; ...
+                ""; ...
+                "% Cada cambio definido con Set se conserva como una variación."; ...
+                "variationPlan = struct('path', {}, 'values', {}, 'reference', {}, 'label', {});"];
             for index = 1:numel(configuration.queue)
                 item = configuration.queue(index);
                 path = QUSConfigurationLogic.queuePath(item);
@@ -967,27 +1075,6 @@ classdef QUSConfigurationLogic
             clear cleanup
         end
 
-        function lines = referenceAssignmentLines(reference)
-            lines = strings(0, 1);
-            lines = QUSConfigurationLogic.addAssignments(lines, 'referenceConfiguration.geometry', reference.geometry);
-            lines = QUSConfigurationLogic.addAssignments(lines, 'referenceConfiguration.medium', reference.medium);
-            lines = QUSConfigurationLogic.addAssignments(lines, 'referenceConfiguration.transducer', reference.transducer);
-            lines = QUSConfigurationLogic.addAssignments(lines, 'referenceConfiguration.sensor', reference.sensor);
-            lines = QUSConfigurationLogic.addAssignments(lines, 'referenceConfiguration.computation', reference.computation);
-            lines = QUSConfigurationLogic.addAssignments(lines, 'referenceConfiguration.reproducibility', reference.reproducibility);
-            lines = QUSConfigurationLogic.addAssignments(lines, 'referenceConfiguration.output', reference.output);
-            lines = QUSConfigurationLogic.addAssignments(lines, 'referenceConfiguration.experiment', reference.experiment);
-        end
-
-        function lines = addAssignments(lines, prefix, values)
-            names = fieldnames(values);
-            for index = 1:numel(names)
-                name = names{index};
-                lines(end + 1, 1) = string(prefix) + '.' + name + ' = ' + ...
-                    QUSConfigurationLogic.matlabLiteral(values.(name)) + ';';
-            end
-        end
-
         function path = queuePath(item)
             path = '';
             key = [char(item.section), '|', char(item.parameter)];
@@ -1049,8 +1136,13 @@ classdef QUSConfigurationLogic
             text = strrep(char(string(value)), '''', '''''');
         end
 
-        function folder = resultsFolder()
-            folder = fullfile(fileparts(mfilename('fullpath')), 'results');
+        function folder = resultsFolder(app, experimentFolderName)
+            if isprop(app, 'Tree') && isprop(app, 'UIFigure')
+                parentFolder = ProjectExplorerLogic.getOutputParentFolder(app);
+            else
+                parentFolder = fullfile(fileparts(mfilename('fullpath')), 'results');
+            end
+            folder = fullfile(parentFolder, experimentFolderName);
         end
 
         function lines = generatedHelperFunctions()
@@ -1155,6 +1247,11 @@ classdef QUSConfigurationLogic
             if isempty(name)
                 name = 'qus_benchmark';
             end
+        end
+
+        function fileName = getFileName(filePath)
+            [~, name, extension] = fileparts(filePath);
+            fileName = [name, extension];
         end
 
         function dialog = settingsDialog(titleText)

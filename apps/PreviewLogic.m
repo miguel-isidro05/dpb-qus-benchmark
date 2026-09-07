@@ -10,10 +10,20 @@ classdef PreviewLogic
             PreviewLogic.refresh(app);
         end
 
+        function refreshIfAvailable(app)
+            % V2 no tiene pestañas de preview. V3 sí, y puede redibujarse.
+            if isprop(app, 'GeometricoTab') && isprop(app, 'SealTab')
+                PreviewLogic.refresh(app);
+            end
+        end
+
         function refresh(app)
+            % Redibuja la vista previa con los valores actuales de la interfaz.
+            % No modifica la configuración de referencia ni la cola.
             handles = getappdata(app.UIFigure, 'PreviewLogicHandles');
             if isempty(handles) || ~isvalid(handles.geometryAxes)
                 PreviewLogic.createPreviewAxes(app);
+                PreviewLogic.installRefreshCallbacks(app);
                 handles = getappdata(app.UIFigure, 'PreviewLogicHandles');
             end
 
@@ -58,10 +68,11 @@ classdef PreviewLogic
             controls = { ...
                 app.DimensionesEditField, app.ResolucinEditField, ...
                 app.PMLCantcapasEditField, app.CFLEditField, ...
+                app.TiempoEditField, ...
                 app.VelsonidoEditField, app.DensidadEditField, ...
                 app.FrecuenciaEditField, app.AmplitudEditField_2, ...
                 app.NciclosEditField, app.ModeloDropDown, ...
-                app.TipoDropDown, app.SealDropDown, app.MododehazDropDown};
+                app.SealDropDown, app.MododehazDropDown};
 
             for index = 1:numel(controls)
                 controls{index}.ValueChangedFcn = @(~, ~) PreviewLogic.refresh(app);
@@ -72,6 +83,8 @@ classdef PreviewLogic
             configuration.axialSize = app.DimensionesEditField.Value;
             configuration.ppw = app.ResolucinEditField.Value;
             configuration.pmlLayers = app.PMLCantcapasEditField.Value;
+            configuration.cfl = app.CFLEditField.Value;
+            configuration.depth = app.TiempoEditField.Value;
             configuration.soundSpeed = app.VelsonidoEditField.Value;
             configuration.density = app.DensidadEditField.Value;
             configuration.frequency = app.FrecuenciaEditField.Value;
@@ -242,16 +255,7 @@ classdef PreviewLogic
                 return
             end
 
-            samplingFrequency = max(40 * configuration.frequency, 20e6);
-            duration = configuration.cycles / configuration.frequency;
-            sampleCount = max(256, ceil(1.2 * duration * samplingFrequency));
-            time = (0:sampleCount - 1) / samplingFrequency;
-            active = time <= duration;
-            activeCount = nnz(active);
-            window = 0.5 - 0.5 * cos(2 * pi * (0:activeCount - 1) / max(activeCount - 1, 1));
-            signal = zeros(size(time));
-            signal(active) = configuration.amplitude * ...
-                sin(2 * pi * configuration.frequency * time(active)) .* window;
+            [time, signal, samplingFrequency] = PreviewLogic.makeToneBurst(configuration);
 
             plot(timeAxes, time * 1e6, signal / 1e6, 'Color', [0 0.35 0.75], 'LineWidth', 1.3);
             grid(timeAxes, 'on');
@@ -259,16 +263,48 @@ classdef PreviewLogic
             xlabel(timeAxes, 'Tiempo [µs]');
             ylabel(timeAxes, 'Presión [MPa]');
 
-            frequencyAxis = (0:floor(numel(signal) / 2)) * samplingFrequency / numel(signal);
-            spectrum = abs(fft(signal)) / numel(signal);
-            spectrum = spectrum(1:numel(frequencyAxis));
-            plot(frequencyAxes, frequencyAxis / 1e6, spectrum / max(max(spectrum), eps), ...
+            signalLength = numel(signal);
+            spectrumTwoSided = abs(fft(signal) / signalLength);
+            spectrum = spectrumTwoSided(1:floor(signalLength / 2) + 1);
+            if rem(signalLength, 2) == 0
+                spectrum(2:end - 1) = 2 * spectrum(2:end - 1);
+            else
+                spectrum(2:end) = 2 * spectrum(2:end);
+            end
+            frequencyAxis = samplingFrequency * (0:floor(signalLength / 2)) / signalLength;
+            plot(frequencyAxes, frequencyAxis / 1e6, spectrum / 1e6, ...
                 'Color', [0.85 0.35 0], 'LineWidth', 1.3);
             grid(frequencyAxes, 'on');
-            title(frequencyAxes, 'Espectro de magnitud');
+            title(frequencyAxes, 'Espectro unilateral de amplitud');
             xlabel(frequencyAxes, 'Frecuencia [MHz]');
-            ylabel(frequencyAxes, 'Magnitud normalizada');
-            xlim(frequencyAxes, [0, max(2 * configuration.frequency / 1e6, 1)]);
+            ylabel(frequencyAxes, 'Amplitud [MPa]');
+            xlim(frequencyAxes, [0, min(samplingFrequency / 2, ...
+                max(2 * configuration.frequency, 1e6)) / 1e6]);
+        end
+
+        function [time, signal, samplingFrequency] = makeToneBurst(configuration)
+            try
+                dx = configuration.soundSpeed / ...
+                    (configuration.ppw * configuration.frequency);
+                nx = roundEven(configuration.axialSize / dx);
+                ny = roundEven(configuration.lateralSize / dx);
+                kgrid = kWaveGrid(nx, dx, ny, dx);
+                endTime = configuration.depth * 2 / configuration.soundSpeed;
+                kgrid.makeTime(configuration.soundSpeed, configuration.cfl, endTime);
+                samplingFrequency = 1 / kgrid.dt;
+                signal = configuration.amplitude * toneBurst( ...
+                    samplingFrequency, configuration.frequency, configuration.cycles);
+                time = (0:numel(signal) - 1) * kgrid.dt;
+            catch
+                samplingFrequency = max(40 * configuration.frequency, 20e6);
+                duration = configuration.cycles / configuration.frequency;
+                sampleCount = max(256, ceil(1.2 * duration * samplingFrequency));
+                time = (0:sampleCount - 1) / samplingFrequency;
+                active = time <= duration;
+                signal = zeros(size(time));
+                signal(active) = configuration.amplitude * ...
+                    sin(2 * pi * configuration.frequency * time(active));
+            end
         end
 
         function showIncomplete(axesHandle, message)
@@ -292,8 +328,11 @@ classdef PreviewLogic
         end
 
         function valid = isSignalValid(configuration)
-            valid = all(isfinite([configuration.frequency, configuration.amplitude, configuration.cycles])) && ...
-                all([configuration.frequency, configuration.amplitude, configuration.cycles] > 0);
+            valid = all(isfinite([configuration.frequency, configuration.amplitude, ...
+                configuration.cycles, configuration.soundSpeed, configuration.ppw, ...
+                configuration.cfl, configuration.depth])) && ...
+                all([configuration.frequency, configuration.amplitude, configuration.cycles, ...
+                configuration.soundSpeed, configuration.ppw, configuration.cfl, configuration.depth] > 0);
         end
     end
 end

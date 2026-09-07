@@ -8,7 +8,7 @@ addpath(genpath(pwd))
 
 %% Configuración de la GUI
 % El .mat se guarda junto a este pipeline cuando se pulsa Save.
-configurationFile = fullfile(fileparts(mfilename('fullpath')), 'homogeneous_benchmark_configuration.mat');
+configurationFile = fullfile(fileparts(mfilename('fullpath')), 'mike_configuration.mat');
 if ~isfile(configurationFile)
     error('No se encontró la configuración generada por la GUI: %s', configurationFile);
 end

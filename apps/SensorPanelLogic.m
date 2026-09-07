@@ -5,7 +5,21 @@ classdef SensorPanelLogic
     methods (Static)
 
         function initialize(app)
+            SensorPanelLogic.installCallbacks(app);
             SensorPanelLogic.updateForSensorType(app);
+        end
+
+        function onSensorTypeChanged(app)
+            % El tipo de sensor decide qué controles son válidos para medir.
+            SensorPanelLogic.updateForSensorType(app);
+            SensorPanelLogic.refreshPreviewIfAvailable(app);
+        end
+
+        function onEmitterTypeChanged(app)
+            % Si el sensor comparte el emisor, su referencia debe mostrar
+            % inmediatamente el nuevo tipo de transductor.
+            SensorPanelLogic.refreshEmitterReference(app);
+            SensorPanelLogic.refreshPreviewIfAvailable(app);
         end
 
         function updateForSensorType(app)
@@ -61,6 +75,17 @@ classdef SensorPanelLogic
     end
 
     methods (Static, Access = private)
+
+        function installCallbacks(app)
+            app.TipoDropDown_2.ValueChangedFcn = @(~, ~) ...
+                SensorPanelLogic.onSensorTypeChanged(app);
+            app.TipoDropDown.ValueChangedFcn = @(~, ~) ...
+                SensorPanelLogic.onEmitterTypeChanged(app);
+        end
+
+        function refreshPreviewIfAvailable(app)
+            PreviewLogic.refreshIfAvailable(app);
+        end
 
         function setChoices(dropDown, items, preferredValue)
             previousValue = char(string(dropDown.Value));
