@@ -5,6 +5,12 @@ classdef PreviewLogic
     methods (Static)
 
         function initialize(app)
+            % Mantiene la nomenclatura científica de las tres pestañas.
+            app.GeometricoTab.Title = 'Geometric';
+            if isprop(app, 'PropiedadesTab')
+                app.PropiedadesTab.Title = 'Properties';
+            end
+            app.SealTab.Title = 'Signal';
             PreviewLogic.createPreviewAxes(app);
             PreviewLogic.installRefreshCallbacks(app);
             PreviewLogic.refresh(app);
@@ -29,7 +35,10 @@ classdef PreviewLogic
 
             configuration = PreviewLogic.readConfiguration(app);
             PreviewLogic.drawGeometry(handles.geometryAxes, configuration);
-            PreviewLogic.drawMedium(handles.mediumAxes, configuration);
+            PreviewLogic.drawMediumDomain(handles.mediumAxes, configuration);
+            if isfield(handles, 'soundSpeedAxes') && isvalid(handles.soundSpeedAxes)
+                PreviewLogic.drawMediumProperties(handles, configuration);
+            end
             PreviewLogic.drawSignal(handles.timeAxes, handles.frequencyAxes, configuration);
         end
     end
@@ -48,6 +57,19 @@ classdef PreviewLogic
             geometryAxes = uiaxes(geometryGrid);
             mediumAxes = uiaxes(geometryGrid);
 
+            propertyAxes = [];
+            if isprop(app, 'PropiedadesTab')
+                delete(app.PropiedadesTab.Children);
+                propertiesGrid = uigridlayout(app.PropiedadesTab, [1 3]);
+                % Cada mapa tiene su propia barra de color. El margen evita
+                % que su etiqueta invada el eje z del mapa vecino.
+                propertiesGrid.ColumnWidth = {'1x', '1x', '1x'};
+                propertiesGrid.ColumnSpacing = 45;
+                propertiesGrid.Padding = [22 10 22 10];
+                propertyAxes = [uiaxes(propertiesGrid), uiaxes(propertiesGrid), ...
+                    uiaxes(propertiesGrid)];
+            end
+
             signalGrid = uigridlayout(app.SealTab, [1 2]);
             signalGrid.ColumnWidth = {'1x', '1x'};
             signalGrid.ColumnSpacing = 10;
@@ -61,6 +83,11 @@ classdef PreviewLogic
                 'mediumAxes', mediumAxes, ...
                 'timeAxes', timeAxes, ...
                 'frequencyAxes', frequencyAxes);
+            if ~isempty(propertyAxes)
+                handles.soundSpeedAxes = propertyAxes(1);
+                handles.densityAxes = propertyAxes(2);
+                handles.absorptionAxes = propertyAxes(3);
+            end
             setappdata(app.UIFigure, 'PreviewLogicHandles', handles);
         end
 
@@ -124,6 +151,9 @@ classdef PreviewLogic
             configuration.emitterAxial = state.advanced.transducer.base_translation_x;
             configuration.emitterLateral = state.advanced.transducer.base_translation_y;
             configuration.rotation = state.advanced.transducer.rotation;
+            configuration.densityStd = state.advanced.medium.density_std;
+            configuration.homAlpha = state.advanced.medium.hom_alpha;
+            configuration.rngSeed = state.advanced.reproducibility.rng_seed;
         end
 
         function drawGeometry(axesHandle, configuration)
@@ -133,63 +163,104 @@ classdef PreviewLogic
                 return
             end
 
-            PreviewLogic.drawDomain(axesHandle, configuration, false);
-            title(axesHandle, 'Dominio 2D, PML y emisor');
+            PreviewLogic.drawDomain(axesHandle, configuration, true);
+            title(axesHandle, '2-D domain, PML and transmitter');
         end
 
-        function drawMedium(axesHandle, configuration)
+        function drawMediumDomain(axesHandle, configuration)
             cla(axesHandle);
             if ~PreviewLogic.isGeometryValid(configuration)
-                PreviewLogic.showIncomplete(axesHandle, 'El mapa del medio aparecerá con una geometría válida.');
+                PreviewLogic.showIncomplete(axesHandle, 'El dominio del medio aparecerá con una geometría válida.');
                 return
             end
 
-            lateral = linspace(-configuration.lateralSize / 2, configuration.lateralSize / 2, 160) * 1e3;
-            axial = linspace(0, configuration.axialSize, 200) * 1e3;
-            mediumMap = configuration.soundSpeed * ones(numel(axial), numel(lateral));
-            imagesc(axesHandle, lateral, axial, mediumMap);
-            set(axesHandle, 'YDir', 'normal');
-            axis(axesHandle, 'image');
-            colormap(axesHandle, parula);
-            colorbar(axesHandle);
-            hold(axesHandle, 'on');
-            PreviewLogic.drawDomain(axesHandle, configuration, true);
-            hold(axesHandle, 'off');
-            title(axesHandle, sprintf('Medio: velocidad de sonido (%.0f m/s)', configuration.soundSpeed));
-            xlabel(axesHandle, 'Lateral [mm]');
-            ylabel(axesHandle, 'Axial [mm]');
+            % Esta vista representa solo el área física y la PML del medio.
+            PreviewLogic.drawDomain(axesHandle, configuration, false);
+            title(axesHandle, 'Medium domain and PML');
         end
 
-        function drawDomain(axesHandle, configuration, overlayOnly)
-            if ~overlayOnly
-                hold(axesHandle, 'on');
+        function drawMediumProperties(handles, configuration)
+            axesHandles = [handles.soundSpeedAxes, handles.densityAxes, ...
+                handles.absorptionAxes];
+            if ~PreviewLogic.isGeometryValid(configuration)
+                for axesHandle = axesHandles
+                    PreviewLogic.showIncomplete(axesHandle, ...
+                        'Las propiedades aparecerán con una geometría válida.');
+                end
+                return
             end
 
-            axialMm = configuration.axialSize * 1e3;
-            lateralMm = configuration.lateralSize * 1e3;
-            pmlAxialMm = configuration.pmlLayers * configuration.dx * 1e3;
-            pmlLateralMm = configuration.pmlLayers * configuration.dx * 1e3;
+            lateral = linspace(-configuration.lateralSize / 2, ...
+                configuration.lateralSize / 2, 160) * 100;
+            axial = linspace(0, configuration.axialSize, 200) * 100;
+            soundSpeed = configuration.soundSpeed * ones(numel(axial), numel(lateral));
 
-            rectangle(axesHandle, 'Position', [-lateralMm / 2, 0, lateralMm, axialMm], ...
+            % Mismo medio homogéneo del pipeline. El stream local conserva
+            % la reproducibilidad sin cambiar la semilla global de MATLAB.
+            stream = RandStream('mt19937ar', 'Seed', max(0, round(configuration.rngSeed)));
+            density = configuration.density * (1 + configuration.densityStd * ...
+                randn(stream, numel(axial), numel(lateral)));
+            absorption = configuration.homAlpha * ones(numel(axial), numel(lateral));
+
+            PreviewLogic.drawPropertyMap(handles.soundSpeedAxes, lateral, axial, soundSpeed, ...
+                'Sound speed', 'm/s', []);
+            PreviewLogic.drawPropertyMap(handles.densityAxes, lateral, axial, density, ...
+                'Density', 'kg/m^3', []);
+            PreviewLogic.drawPropertyMap(handles.absorptionAxes, lateral, axial, absorption, ...
+                'Absorption', 'dB/cm/MHz', [0.4, 1.0]);
+        end
+
+        function drawPropertyMap(axesHandle, lateral, axial, mediumMap, titleText, colorbarText, limits)
+            cla(axesHandle);
+            % showIncomplete oculta el eje; cada redibujado válido debe
+            % restaurar sus reglas, marcas y etiquetas dimensionales.
+            axis(axesHandle, 'on');
+            imagesc(axesHandle, lateral, axial, mediumMap);
+            set(axesHandle, 'YDir', 'reverse');
+            axis(axesHandle, 'image');
+            box(axesHandle, 'on');
+            grid(axesHandle, 'off');
+            axesHandle.LineWidth = 1.2;
+            colormap(axesHandle, parula);
+            if ~isempty(limits)
+                clim(axesHandle, limits);
+            end
+            colorbarHandle = colorbar(axesHandle);
+            colorbarHandle.Label.String = colorbarText;
+            title(axesHandle, titleText);
+            % Convención exacta del pipeline: x lateral y z axial.
+            xlabel(axesHandle, 'x [cm]');
+            ylabel(axesHandle, 'z [cm]');
+        end
+
+        function drawDomain(axesHandle, configuration, showEmitter)
+            axis(axesHandle, 'on');
+            box(axesHandle, 'on');
+            hold(axesHandle, 'on');
+
+            axialCm = configuration.axialSize * 100;
+            lateralCm = configuration.lateralSize * 100;
+            pmlAxialCm = configuration.pmlLayers * configuration.dx * 100;
+            pmlLateralCm = configuration.pmlLayers * configuration.dx * 100;
+
+            rectangle(axesHandle, 'Position', [-lateralCm / 2, 0, lateralCm, axialCm], ...
                 'EdgeColor', [0.15 0.15 0.15], 'LineWidth', 1.2, 'LineStyle', '-');
             rectangle(axesHandle, 'Position', ...
-                [-lateralMm / 2 + pmlLateralMm, pmlAxialMm, ...
-                 lateralMm - 2 * pmlLateralMm, axialMm - 2 * pmlAxialMm], ...
+                [-lateralCm / 2 + pmlLateralCm, pmlAxialCm, ...
+                 lateralCm - 2 * pmlLateralCm, axialCm - 2 * pmlAxialCm], ...
                 'EdgeColor', [0.35 0.35 0.35], 'LineWidth', 1, 'LineStyle', '--');
 
-            PreviewLogic.drawEmitter(axesHandle, configuration);
-            PreviewLogic.drawFocus(axesHandle, configuration);
-
-            axis(axesHandle, 'equal');
-            PreviewLogic.setGeometryLimits(axesHandle, configuration);
-            xlabel(axesHandle, 'Lateral [mm]');
-            ylabel(axesHandle, 'Axial [mm]');
-            grid(axesHandle, 'on');
-
-            if ~overlayOnly
-                hold(axesHandle, 'off');
+            if showEmitter
+                PreviewLogic.drawEmitter(axesHandle, configuration);
+                PreviewLogic.drawFocus(axesHandle, configuration);
             end
 
+            axis(axesHandle, 'equal');
+            PreviewLogic.setGeometryLimits(axesHandle, configuration, showEmitter);
+            xlabel(axesHandle, 'x [cm]');
+            ylabel(axesHandle, 'z [cm]');
+            grid(axesHandle, 'on');
+            hold(axesHandle, 'off');
         end
 
         function drawEmitter(axesHandle, configuration)
@@ -215,8 +286,8 @@ classdef PreviewLogic
                     color = [0 0.35 0.75];
                     lineWidth = 3;
                 end
-                line(axesHandle, [firstPoint(2), lastPoint(2)] * 1e3, ...
-                    [firstPoint(1), lastPoint(1)] * 1e3, ...
+                line(axesHandle, [firstPoint(2), lastPoint(2)] * 100, ...
+                    [firstPoint(1), lastPoint(1)] * 100, ...
                     'Color', color, 'LineWidth', lineWidth);
             end
         end
@@ -225,18 +296,23 @@ classdef PreviewLogic
             normal = [cos(configuration.rotation), -sin(configuration.rotation)];
             focusPoint = [configuration.emitterAxial, configuration.emitterLateral] + ...
                 configuration.focus * normal;
-            plot(axesHandle, focusPoint(2) * 1e3, focusPoint(1) * 1e3, ...
+            plot(axesHandle, focusPoint(2) * 100, focusPoint(1) * 100, ...
                 'o', 'MarkerSize', 6, 'MarkerFaceColor', [0.85 0.35 0], ...
                 'MarkerEdgeColor', [0.25 0.12 0]);
         end
 
-        function setGeometryLimits(axesHandle, configuration)
-            axial = configuration.axialSize * 1e3;
-            lateral = configuration.lateralSize * 1e3;
+        function setGeometryLimits(axesHandle, configuration, includeEmitter)
+            axial = configuration.axialSize * 100;
+            lateral = configuration.lateralSize * 100;
+            if ~includeEmitter
+                xlim(axesHandle, [-lateral / 2, lateral / 2]);
+                ylim(axesHandle, [0, axial]);
+                return
+            end
             focusAxial = (configuration.emitterAxial + ...
-                configuration.focus * cos(configuration.rotation)) * 1e3;
-            emitterAxial = configuration.emitterAxial * 1e3;
-            emitterLateral = configuration.emitterLateral * 1e3;
+                configuration.focus * cos(configuration.rotation)) * 100;
+            emitterAxial = configuration.emitterAxial * 100;
+            emitterLateral = configuration.emitterLateral * 100;
 
             xMargin = max(2, 0.08 * lateral);
             yMargin = max(2, 0.08 * axial);
@@ -257,11 +333,13 @@ classdef PreviewLogic
 
             [time, signal, samplingFrequency] = PreviewLogic.makeToneBurst(configuration);
 
+            axis(timeAxes, 'on');
+            box(timeAxes, 'on');
             plot(timeAxes, time * 1e6, signal / 1e6, 'Color', [0 0.35 0.75], 'LineWidth', 1.3);
             grid(timeAxes, 'on');
-            title(timeAxes, sprintf('%s en tiempo', configuration.signalType));
-            xlabel(timeAxes, 'Tiempo [µs]');
-            ylabel(timeAxes, 'Presión [MPa]');
+            title(timeAxes, sprintf('%s in time', configuration.signalType));
+            xlabel(timeAxes, 'Time [µs]');
+            ylabel(timeAxes, 'Pressure [MPa]');
 
             signalLength = numel(signal);
             spectrumTwoSided = abs(fft(signal) / signalLength);
@@ -272,12 +350,14 @@ classdef PreviewLogic
                 spectrum(2:end) = 2 * spectrum(2:end);
             end
             frequencyAxis = samplingFrequency * (0:floor(signalLength / 2)) / signalLength;
+            axis(frequencyAxes, 'on');
+            box(frequencyAxes, 'on');
             plot(frequencyAxes, frequencyAxis / 1e6, spectrum / 1e6, ...
                 'Color', [0.85 0.35 0], 'LineWidth', 1.3);
             grid(frequencyAxes, 'on');
-            title(frequencyAxes, 'Espectro unilateral de amplitud');
-            xlabel(frequencyAxes, 'Frecuencia [MHz]');
-            ylabel(frequencyAxes, 'Amplitud [MPa]');
+            title(frequencyAxes, 'One-sided amplitude spectrum');
+            xlabel(frequencyAxes, 'Frequency [MHz]');
+            ylabel(frequencyAxes, 'Amplitude [MPa]');
             xlim(frequencyAxes, [0, min(samplingFrequency / 2, ...
                 max(2 * configuration.frequency, 1e6)) / 1e6]);
         end
