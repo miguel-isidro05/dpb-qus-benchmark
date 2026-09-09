@@ -541,11 +541,11 @@ classdef ProjectExplorerLogic
 
             while true
                 hasGit = isfolder(fullfile(currentFolder, '.git'));
-                hasResults = isfolder(fullfile(currentFolder, 'results'));
+                hasCode = isfolder(fullfile(currentFolder, 'code'));
                 hasApps = isfolder(fullfile(currentFolder, 'apps'));
                 hasSrc = isfolder(fullfile(currentFolder, 'src'));
                 hasConfig = isfolder(fullfile(currentFolder, 'config'));
-                looksLikeProject = hasGit || (hasResults && (hasApps || hasSrc || hasConfig));
+                looksLikeProject = hasGit || (hasCode && (hasApps || hasSrc || hasConfig));
 
                 if looksLikeProject
                     rootFolder = currentFolder;
@@ -631,12 +631,7 @@ classdef ProjectExplorerLogic
         end
 
         function folderPath = defaultOutputParentFolder(repositoryRoot)
-            candidate = fullfile(repositoryRoot, 'apps', 'results');
-            if isfolder(candidate)
-                folderPath = candidate;
-            else
-                folderPath = repositoryRoot;
-            end
+            folderPath = fullfile(repositoryRoot, 'apps', 'code');
         end
 
         function label = outputParentLabel(folderPath)

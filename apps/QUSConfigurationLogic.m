@@ -23,6 +23,9 @@ classdef QUSConfigurationLogic
                 for index = 1:numel(changes)
                     state.queue = QUSConfigurationLogic.addChange(state.queue, changes(index));
                 end
+                % El nombre identifica la salida, no una nueva referencia.
+                % Reset es la única acción que vacía la cola.
+                state.reference.experiment.name = current.experiment.name;
             end
 
             state.advanced.reproducibility = current.reproducibility;
@@ -60,10 +63,8 @@ classdef QUSConfigurationLogic
                 return
             end
 
-            if ~state.referenceDefined || ...
-                    ~strcmp(state.reference.experiment.name, current.experiment.name)
-                % Un nombre nuevo representa otro experimento. Parte de su
-                % propia referencia y no hereda cambios en cola del anterior.
+            if ~state.referenceDefined
+                % La primera configuración define la referencia del plan.
                 state.reference = current;
                 state.referenceDefined = true;
                 state.queue = QUSConfigurationLogic.emptyQueue();
@@ -74,6 +75,9 @@ classdef QUSConfigurationLogic
                 for index = 1:numel(changes)
                     state.queue = QUSConfigurationLogic.addChange(state.queue, changes(index));
                 end
+                % Renombrar solo cambia el nombre de la carpeta y archivos de
+                % salida. No modifica la referencia física ni borra la cola.
+                state.reference.experiment.name = current.experiment.name;
             end
             state.advanced.reproducibility = current.reproducibility;
             QUSConfigurationLogic.storeState(app, state);
@@ -88,7 +92,7 @@ classdef QUSConfigurationLogic
                     'de k-Wave.']);
 
             fileStem = QUSConfigurationLogic.safeFileName(state.reference.experiment.name);
-            outputFolder = QUSConfigurationLogic.resultsFolder(app, fileStem);
+            outputFolder = QUSConfigurationLogic.codeFolder(app, fileStem);
             if ~exist(outputFolder, 'dir')
                 mkdir(outputFolder);
             end
@@ -937,10 +941,13 @@ classdef QUSConfigurationLogic
             isAlphaSweep = ~isempty(cases) && all([cases.isAlphaSweep]);
             lines = [ ...
                 "%% Homogeneous reference simulations"; "clearvars"; "clc"; ""; ...
+                "scriptFolder = fileparts(mfilename('fullpath'));"; ...
+                "if isempty(scriptFolder), scriptFolder = pwd; end;"; ...
+                "cd(scriptFolder);"; ...
                 "parallel.gpu.enableCUDAForwardCompatibility(true)"; ""; ...
                 "%% Reproducibility"; ...
                 "rng(" + QUSConfigurationLogic.matlabLiteral(reference.reproducibility.rng_seed) + ")"; ...
-                "addpath(genpath(pwd))"; ""; ...
+                "addpath(genpath(scriptFolder))"; ""; ...
                 "%% Output setup"];
             if isAlphaSweep
                 alphaValues = arrayfun(@(item) item.configuration.medium.hom_alpha, cases);
@@ -969,7 +976,7 @@ classdef QUSConfigurationLogic
                 "    alpha_mode = parameters.alpha_mode;"; ...
                 "    sound_speed_ref = parameters.sound_speed_ref;"; ...
                 "    simuName = parameters.simuName;"; ""; ...
-                "    outputFolder = fullfile(pwd, simuName);"; ...
+                "    outputFolder = fullfile(scriptFolder, 'out', simuName);"; ...
                 "    if ~exist(outputFolder, 'dir')"; "        mkdir(outputFolder);"; "    end"; ""; ...
                 "    %% Source parameters"; ""; ...
                 "    source_f0 = parameters.source_f0;"; ...
@@ -1367,11 +1374,11 @@ classdef QUSConfigurationLogic
             text = strrep(char(string(value)), '''', '''''');
         end
 
-        function folder = resultsFolder(app, experimentFolderName)
+        function folder = codeFolder(app, experimentFolderName)
             if isprop(app, 'Tree') && isprop(app, 'UIFigure')
                 parentFolder = ProjectExplorerLogic.getOutputParentFolder(app);
             else
-                parentFolder = fullfile(fileparts(mfilename('fullpath')), 'results');
+                parentFolder = fullfile(fileparts(mfilename('fullpath')), 'code');
             end
             folder = fullfile(parentFolder, experimentFolderName);
         end

@@ -3,7 +3,7 @@
 clearvars
 clc
 
-%parallel.gpu.enableCUDAForwardCompatibility(true)
+parallel.gpu.enableCUDAForwardCompatibility(true)
 
 rng(23)
 addpath(genpath(pwd))
@@ -21,7 +21,7 @@ for ii = 1: length(refValues)
     c0              = 1540;     % sound speed [m/s]
     rho0            = 1000;     % density [kg/m^3]
     
-    hom_alpha       = 0.53;     % atenuacion[dB/(MHz^y cm)]
+    hom_alpha       = refValues (ii);     % atenuacion[dB/(MHz^y cm)]
     density_std     = 0.04;
 
     simuName = ['homogeneus_target_alpha', char(strrep(string(refValues(ii)), '.', 'p')), ...
@@ -62,7 +62,7 @@ for ii = 1: length(refValues)
     
     %% Computational parameters
     
-    DATA_CAST       = 'single'; % set to 'single' or 'gpuArray-single'
+    DATA_CAST       = 'gpuArray-single'; % set to 'single' or 'gpuArray-single'
     ppw             = 6;                 % number of points per wavelength
     depth           = 5.5e-2;            % imaging depth [m]
     cfl             = 0.3;               % CFL number

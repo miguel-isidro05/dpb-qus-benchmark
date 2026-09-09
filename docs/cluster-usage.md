@@ -46,14 +46,24 @@ Ejemplos válidos: `mi_p_qus_baseline.sh` y `mi_m_medium_sweep.sh`.
 6. Guardar resultados y registros en la carpeta personal. Reportar problemas
    operativos, mantenimientos o dudas por el canal de WhatsApp del cluster.
 
-## Límites de esta guía
+## Comandos utiles
+- cat script.m: muestra lo que se imprimio en el script
 
-La comunicación recibida no incluye el hostname, el método de conexión, el
-planificador o los comandos de envío. No se deben asumir esos datos ni copiar
-comandos de fuentes externas. Cuando se disponga de la guía institucional o de
-un ejemplo aprobado, se añadirá aquí el procedimiento exacto.
+- Estado de los worker:
+sacct --allusers --format="JobID,JobName,Partition,State,Elapsed,User,NodeList"
 
-## Seguridad de acceso
+Para acomodar el ancho de las columnas, usar:
+squeue --format="%.18i %.9P %.25j %.8u %.2t %.10M %.6D %R"
+sacct --allusers --format="JobID,JobName%20,Partition%20,State,Elapsed,User%10,NodeList"
 
-El usuario de acceso comunicado es `misidro`. La contraseña entregada por
-correo no se registra en este repositorio ni se incorpora a scripts.
+ Ahora, en cas de querer ver el estado de los workers en el tiempo puede añadir el comando watch al comando anterior:
+watch -n1 "sacct --allusers --format="JobID,JobName,Partition,State,Elapsed,User,NodeList""
+
+- sbatch app.sh: para correr el sh
+- sacct: para ver lo que ocurre
+
+## Seguimiento
+
+- hacer "git clone url.git", para traer el codigo o la carpeta o lo que quiera hacer que llegue.
+
+
