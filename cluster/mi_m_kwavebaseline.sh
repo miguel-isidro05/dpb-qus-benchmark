@@ -6,7 +6,4 @@
 #SBATCH --nodelist=worker8
 #SBATCH --output="mi_m_kwave_baseline-%j.out"
 
-script_directory="$(cd -- "$(dirname -- "$0")" && pwd)"
-cd "${script_directory}"
-
 srun matlab -nosplash -nodesktop -nodisplay -r "mi_m_kwavebaseline; exit"

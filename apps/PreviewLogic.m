@@ -168,7 +168,7 @@ classdef PreviewLogic
             end
 
             PreviewLogic.drawDomain(axesHandle, configuration, true);
-            title(axesHandle, 'Physical k-Wave grid, external PML and transducer');
+            title(axesHandle, '2-D domain, PML and transmitter');
         end
 
         function drawMediumDomain(axesHandle, configuration)
@@ -179,7 +179,7 @@ classdef PreviewLogic
             end
 
             PreviewLogic.drawDomain(axesHandle, configuration, false);
-            title(axesHandle, 'Physical medium grid and external PML');
+            title(axesHandle, 'Medium domain and PML');
         end
 
         function drawMediumProperties(handles, configuration)
@@ -206,11 +206,11 @@ classdef PreviewLogic
             absorption = configuration.homAlpha * ones(numel(axial), numel(lateral));
 
             PreviewLogic.drawPropertyMap(handles.soundSpeedAxes, lateral, axial, soundSpeed, ...
-                'Sound speed: physical grid', 'm/s', []);
+                'Sound speed', 'm/s', []);
             PreviewLogic.drawPropertyMap(handles.densityAxes, lateral, axial, density, ...
-                'Density: physical grid', 'kg/m^3', []);
+                'Density', 'kg/m^3', []);
             PreviewLogic.drawPropertyMap(handles.absorptionAxes, lateral, axial, absorption, ...
-                'Absorption: physical grid', 'dB/cm/MHz', [0.4, 1.0]);
+                'Absorption', 'dB/cm/MHz', [0.4, 1.0]);
         end
 
         function drawPropertyMap(axesHandle, lateral, axial, mediumMap, titleText, colorbarText, limits)
@@ -261,15 +261,13 @@ classdef PreviewLogic
             if showEmitter
                 PreviewLogic.drawEmitter(axesHandle, configuration);
                 PreviewLogic.drawFocus(axesHandle, configuration);
-                PreviewLogic.drawGeometryLegend(axesHandle);
-                PreviewLogic.drawArrayCoverageWarning(axesHandle, configuration, frame);
             end
 
             axis(axesHandle, 'equal');
             PreviewLogic.setGeometryLimits(axesHandle, frame);
             set(axesHandle, 'YDir', 'reverse');
-            xlabel(axesHandle, 'x lateral [cm]');
-            ylabel(axesHandle, 'z from transducer [cm]');
+            xlabel(axesHandle, 'x [cm]');
+            ylabel(axesHandle, 'z [cm]');
             grid(axesHandle, 'on');
             hold(axesHandle, 'off');
         end
@@ -334,34 +332,6 @@ classdef PreviewLogic
                 (frame.lateralMax + frame.pml + margin) * 100]);
             ylim(axesHandle, [(frame.axialMin - frame.pml - margin) * 100, ...
                 (frame.axialMax + frame.pml + margin) * 100]);
-        end
-
-        function drawGeometryLegend(axesHandle)
-            transmitter = plot(axesHandle, NaN, NaN, '-', ...
-                'Color', [0 0.35 0.75], 'LineWidth', 3);
-            receiver = plot(axesHandle, NaN, NaN, '-', ...
-                'Color', [0.1 0.1 0.1], 'LineWidth', 2);
-            focus = plot(axesHandle, NaN, NaN, 'o', ...
-                'MarkerFaceColor', [0.85 0.35 0], ...
-                'MarkerEdgeColor', [0.25 0.12 0]);
-            legend(axesHandle, [transmitter, receiver, focus], ...
-                {'Active transmit', 'Receive-only', 'Transmit focus'}, ...
-                'Location', 'southoutside');
-        end
-
-        function drawArrayCoverageWarning(axesHandle, configuration, frame)
-            apertureRx = configuration.focus / configuration.fNumberRx;
-            elementCount = max(1, floor(apertureRx / configuration.elementPitch));
-            halfReceiverAperture = elementCount * configuration.elementPitch / 2;
-            halfScanRange = ((configuration.nLines - 1) / 2) * ...
-                configuration.elementPitch;
-
-            if halfScanRange + halfReceiverAperture > frame.lateralSize / 2
-                text(axesHandle, 0, (frame.axialMax + frame.pml) * 100, ...
-                    'Warning: edge scanlines exceed the lateral grid width.', ...
-                    'HorizontalAlignment', 'center', 'VerticalAlignment', 'bottom', ...
-                    'Color', [0.70 0.15 0.05], 'FontSize', 9, 'FontWeight', 'bold');
-            end
         end
 
         function drawSignal(timeAxes, frequencyAxes, configuration)
