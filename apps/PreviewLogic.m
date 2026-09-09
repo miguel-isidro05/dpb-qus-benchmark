@@ -1,7 +1,5 @@
 classdef PreviewLogic
-    % PreviewLogic
-    % Preview 2D de la configuración. No ejecuta k-Wave ni modifica la cola.
-
+    % Logica para el preview 2D de la configuración. 
     methods (Static)
 
         function initialize(app)
@@ -15,17 +13,18 @@ classdef PreviewLogic
             PreviewLogic.installRefreshCallbacks(app);
             PreviewLogic.refresh(app);
         end
-
+        
+        % V2 no tiene pestañas de preview. V3 sí, y puede redibujarse.
         function refreshIfAvailable(app)
-            % V2 no tiene pestañas de preview. V3 sí, y puede redibujarse.
             if isprop(app, 'GeometricoTab') && isprop(app, 'SealTab')
                 PreviewLogic.refresh(app);
             end
         end
 
+        % Redibuja la vista previa con los valores actuales de la interfaz.
+        % No modifica la configuración de referencia ni la cola.
         function refresh(app)
-            % Redibuja la vista previa con los valores actuales de la interfaz.
-            % No modifica la configuración de referencia ni la cola.
+
             handles = getappdata(app.UIFigure, 'PreviewLogicHandles');
             if isempty(handles) || ~isvalid(handles.geometryAxes)
                 PreviewLogic.createPreviewAxes(app);
@@ -48,7 +47,7 @@ classdef PreviewLogic
         function createPreviewAxes(app)
             delete(app.GeometricoTab.Children);
             delete(app.SealTab.Children);
-
+            
             geometryGrid = uigridlayout(app.GeometricoTab, [1 2]);
             geometryGrid.ColumnWidth = {'1x', '1x'};
             geometryGrid.ColumnSpacing = 10;
@@ -61,6 +60,7 @@ classdef PreviewLogic
             if isprop(app, 'PropiedadesTab')
                 delete(app.PropiedadesTab.Children);
                 propertiesGrid = uigridlayout(app.PropiedadesTab, [1 3]);
+                
                 % Cada mapa tiene su propia barra de color. El margen evita
                 % que su etiqueta invada el eje z del mapa vecino.
                 propertiesGrid.ColumnWidth = {'1x', '1x', '1x'};
@@ -114,8 +114,11 @@ classdef PreviewLogic
             configuration.depth = app.TiempoEditField.Value;
             configuration.soundSpeed = app.VelsonidoEditField.Value;
             configuration.density = app.DensidadEditField.Value;
-            configuration.frequency = app.FrecuenciaEditField.Value;
-            configuration.amplitude = app.AmplitudEditField_2.Value;
+            
+            % Los controles de la interfaz están expresados en MHz y MPa.
+            % El preview y k-Wave trabajan en Hz y Pa.
+            configuration.frequency = app.FrecuenciaEditField.Value * 1e6;
+            configuration.amplitude = app.AmplitudEditField_2.Value * 1e6;
             configuration.cycles = app.NciclosEditField.Value;
             configuration.dx = configuration.soundSpeed / ...
                 (configuration.ppw * configuration.frequency);
@@ -228,6 +231,7 @@ classdef PreviewLogic
             colorbarHandle = colorbar(axesHandle);
             colorbarHandle.Label.String = colorbarText;
             title(axesHandle, titleText);
+            
             % Convención exacta del pipeline: x lateral y z axial.
             xlabel(axesHandle, 'x [cm]');
             ylabel(axesHandle, 'z [cm]');

@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+
 #SBATCH --gpus-per-node=1
 #SBATCH --nodes=1
 #SBATCH --partition=thinkstation
@@ -8,4 +9,4 @@
 script_directory="$(cd -- "$(dirname -- "$0")" && pwd)"
 cd "${script_directory}"
 
-srun matlab -nosplash -nodesktop -nodisplay -r "kWaveBaseCode; exit"
+srun matlab -nosplash -nodesktop -nodisplay -r "mi_m_kwavebaseline; exit"

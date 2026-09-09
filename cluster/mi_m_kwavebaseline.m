@@ -9,8 +9,9 @@ rng(23)
 addpath(genpath(pwd))
 
 %% Output setup
-refValues = [0.55, 0.65, 0.8, 0.9, 0.524]; % Reference at last
+refValues = [0.55, 0.65, 0.8, 0.9, 0.5]; % Reference at last
 
+%Values from reference table
 for ii = 1: length(refValues)
 
     nRefs = 5;
@@ -18,11 +19,11 @@ for ii = 1: length(refValues)
     
     %% Medium parameters
     
-    c0              = 1540;     % sound speed [m/s]
-    rho0            = 1000;     % density [kg/m^3]
+    c0              = 1595;     % sound speed [m/s]
+    rho0            = 1060;     % density [kg/m^3]
     
-    hom_alpha       = refValues (ii);     % atenuacion[dB/(MHz^y cm)]
-    density_std     = 0.04;
+    hom_alpha       = refValues(ii);     % atenuacion[dB/(MHz^y cm)]
+    density_std     = 0.04; %Heterogeneidad introducida a la simulacion
 
     simuName = ['homogeneus_target_alpha', char(strrep(string(refValues(ii)), '.', 'p')), ...
         '_std', char(strrep(string(density_std), '.', 'p'))];
@@ -147,10 +148,8 @@ for ii = 1: length(refValues)
         refSeed = refSeedBase + iRef;
         rng(refSeed);
     
-        fprintf('\n========================================\n');
         fprintf('Running homogeneous reference %d of %d\n', iRef, nRefs);
         fprintf('Seed: %d\n', refSeed);
-        fprintf('========================================\n');
     
         %% Homogeneous medium
     
@@ -303,9 +302,7 @@ end
 function medium = makeHomogeneousDensityOnlyMedium(Nx, Ny, c0, rho0, densityStd, alpha)
 
     medium.sound_speed = c0 * ones(Nx, Ny);
-    
     medium.density = rho0 .* (1 + densityStd * randn(Nx, Ny));
-    
     medium.alpha_coeff = alpha * ones(Nx, Ny);
 
 end

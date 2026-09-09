@@ -1,8 +1,8 @@
 classdef QUSConfigurationLogic
-    % QUSConfigurationLogic
     % Gestiona la configuración reproducible compartida por las apps.
     % Prepara y guarda los datos, pero no ejecuta k-Wave.
-
+    
+    %Estas son solo llamadas a acciones de botones o menus.
     methods (Static)
         function onSet(app)
             state = QUSConfigurationLogic.prepare(app);
@@ -139,7 +139,10 @@ classdef QUSConfigurationLogic
 
                 state.referenceDefined = true;
                 state.reference = loaded.configuration.reference;
-                state.queue = loaded.configuration.queue;
+                % Las colas antiguas usaban etiquetas Hz/Pa, aunque sus
+                % valores ya estaban correctamente almacenados en SI.
+                state.queue = QUSConfigurationLogic.normalizeQueueUnitLabels( ...
+                    loaded.configuration.queue);
                 state.advanced = QUSConfigurationLogic.advancedFromReference(state.reference);
                 QUSConfigurationLogic.applyConfiguration(app, state.reference);
             catch exception
@@ -390,6 +393,8 @@ classdef QUSConfigurationLogic
     end
 
     methods (Static, Access = private)
+        
+        % Se llama antes de acciones importantes como Set, Save, Open o Reset.
         function state = prepare(app)
             if isprop(app, 'GridLayout15') && isvalid(app.GridLayout15)
                 app.GridLayout15.Visible = 'off';
@@ -397,29 +402,33 @@ classdef QUSConfigurationLogic
             app.TextArea.Editable = 'off';
             app.TextArea.FontName = 'Courier New';
             app.TextArea.FontSize = 11;
-
+            
+            %Genera el estado inicial
             if isappdata(app.UIFigure, 'QUSConfigurationState')
                 state = getappdata(app.UIFigure, 'QUSConfigurationState');
                 return
             end
-
+            
             state = struct( ...
                 'referenceDefined', false, ...
                 'reference', struct(), ...
                 'queue', QUSConfigurationLogic.emptyQueue(), ...
                 'advanced', QUSConfigurationLogic.defaultAdvancedSettings());
+
             QUSConfigurationLogic.applyDefaults(app);
             QUSConfigurationLogic.storeState(app, state);
             QUSConfigurationLogic.updateExecution(app, state);
         end
-
+        
+        %Guarda el estado actual de la configuración dentro de la ventana principal de la app.
         function storeState(app, state)
             setappdata(app.UIFigure, 'QUSConfigurationState', state);
         end
-
+        
+        %Default settings para caso de cambio en atenuacion
         function settings = defaultAdvancedSettings()
-            settings.medium = struct('hom_alpha', 0.53, 'density_std', 0.04, ...
-                'alpha_power', 1, 'alpha_mode', 'no_dispersion', 'sound_speed_ref', 1540);
+            settings.medium = struct('hom_alpha', 0.50, 'density_std', 0.04, ...
+                'alpha_power', 1, 'alpha_mode', 'no_dispersion', 'sound_speed_ref', 1595);
             settings.transducer = struct('source_focus', 4e-2, 'element_pitch', 0.3e-3, ...
                 'element_width', 0.25e-3, 'focal_number_tx', 4, 'focal_number_rx', 2, ...
                 'n_lines', 128, 'base_translation_x', -2.7e-2, ...
@@ -435,6 +444,8 @@ classdef QUSConfigurationLogic
                 'save_rf_prebeamformed', true);
         end
 
+        % Esta función completa una configuración de sensor que podría estar incompleta, esta enlazada
+        % a SensorPanelLogic, pero mas global.
         function settings = normalizeSensorSettings(settings)
             defaults = QUSConfigurationLogic.defaultAdvancedSettings();
             defaultSensor = defaults.sensor;
@@ -446,7 +457,8 @@ classdef QUSConfigurationLogic
                 end
             end
         end
-
+        
+        % Setea los nuevos valores de las variables, aun no usado.
         function setSensorVariablesSummary(app, settings)
             variables = {};
             if settings.record_pressure
@@ -463,7 +475,9 @@ classdef QUSConfigurationLogic
             app.VariablesDropDown.Items = {summary};
             app.VariablesDropDown.Value = summary;
         end
-
+        
+        % Aqui se define algunos parametros default (en este caso el
+        % inicial es del pipeline enviado)
         function applyDefaults(app)
             app.DimensionesEditFieldLabel.Text = 'Tamaño axial:';
             app.ResolucinEditFieldLabel.Text = 'PPW:';
@@ -474,10 +488,13 @@ classdef QUSConfigurationLogic
             app.ResolucinEditField.Value = 6;
             app.PMLCantcapasEditField.Value = 41;
             app.CFLEditField.Value = 0.3;
-            app.VelsonidoEditField.Value = 1540;
-            app.DensidadEditField.Value = 1000;
-            app.FrecuenciaEditField.Value = 6.66e6;
-            app.AmplitudEditField_2.Value = 1e6;
+            app.VelsonidoEditField.Value = 1595;
+            app.DensidadEditField.Value = 1060;
+
+            % La interfaz usa MHz y MPa; la configuración persistida y
+            % k-Wave conservan Hz y Pa para no cambiar el contrato físico.
+            app.FrecuenciaEditField.Value = 6.66;
+            app.AmplitudEditField_2.Value = 1;
             app.NciclosEditField.Value = 3.5;
             app.NombreEditField.Value = 'homogeneous_benchmark';
             app.TiempoEditField.Value = 5.5e-2;
@@ -487,9 +504,9 @@ classdef QUSConfigurationLogic
             app.EstadoEditField.Value = 'Sin configuración';
         end
 
+        % Se aplica la logica de ultimo nRef como referenica y la cola en
+        % la forma que se realiza en el pipeline de ejemplo.
         function configureRealizationControls(app, reproducibility)
-            % Estos controles aplican a todos los casos de la cola. El último
-            % caso de referencia usa el segundo valor, igual que el pipeline.
             if isprop(app, 'NmeroderealizacionesSpinner')
                 targetControl = app.NmeroderealizacionesSpinner;
                 targetLabel = app.NmeroderealizacionesSpinnerLabel;
@@ -536,7 +553,8 @@ classdef QUSConfigurationLogic
                 controls{index}.Value = max(1, round(values(index)));
             end
         end
-
+        
+        %lee cuántas realizaciones eligió el usuario en los controles numéricos de la app.
         function reproducibility = readRealizationControls(app, reproducibility)
             if isprop(app, 'NmeroderealizacionesSpinner')
                 reproducibility.n_refs_target = app.NmeroderealizacionesSpinner.Value;
@@ -551,7 +569,9 @@ classdef QUSConfigurationLogic
                 reproducibility.n_refs_reference = app.Spinner2.Value;
             end
         end
-
+        
+        %recoge todos los valores actuales de la interfaz y los organiza en una única estructura llamada configuration
+        % para estructurarlos
         function configuration = readCurrentConfiguration(app, advanced)
             advanced.sensor = QUSConfigurationLogic.normalizeSensorSettings(advanced.sensor);
             configuration.geometry = struct('grid_size_x', app.DimensionesEditField.Value, ...
@@ -566,7 +586,8 @@ classdef QUSConfigurationLogic
                 'sound_speed_ref', advanced.medium.sound_speed_ref);
             configuration.transducer = struct('type', char(app.TipoDropDown.Value), ...
                 'signal', char(app.SealDropDown.Value), 'beam_mode', char(app.MododehazDropDown.Value), ...
-                'frequency', app.FrecuenciaEditField.Value, 'amplitude', app.AmplitudEditField_2.Value, ...
+                'frequency', app.FrecuenciaEditField.Value * 1e6, ...
+                'amplitude', app.AmplitudEditField_2.Value * 1e6, ...
                 'cycles', app.NciclosEditField.Value, ...
                 'source_focus', advanced.transducer.source_focus, 'element_pitch', advanced.transducer.element_pitch, ...
                 'element_width', advanced.transducer.element_width, 'focal_number_tx', advanced.transducer.focal_number_tx, ...
@@ -590,7 +611,8 @@ classdef QUSConfigurationLogic
             configuration.output = advanced.output;
             configuration.experiment = struct('name', char(app.NombreEditField.Value));
         end
-
+        
+        % Algunas llamadas de error
         function validateConfiguration(configuration)
             values = [configuration.geometry.grid_size_x, configuration.geometry.grid_size_y, ...
                 configuration.geometry.ppw, configuration.geometry.pml_size_x, configuration.geometry.pml_size_y, ...
@@ -613,7 +635,8 @@ classdef QUSConfigurationLogic
                 error('Escribe un nombre para el experimento antes de pulsar Set.');
             end
         end
-
+        
+        % Detecta los cambios en los valores y realiza los cambios
         function changes = detectChanges(reference, current)
             referenceRecords = QUSConfigurationLogic.records(reference);
             currentRecords = QUSConfigurationLogic.records(current);
@@ -682,8 +705,8 @@ classdef QUSConfigurationLogic
                     item = state.queue(queueIndex);
                     if strcmp(item.section, section)
                         lines(end + 1) = "  " + item.parameter + ": [" + ...
-                            QUSConfigurationLogic.formatValues(item.values) + ", REF=" + ...
-                            QUSConfigurationLogic.formatValue(item.reference) + "]";
+                            QUSConfigurationLogic.formatValuesForParameter(item.parameter, item.values) + ", REF=" + ...
+                            QUSConfigurationLogic.formatValueForParameter(item.parameter, item.reference) + "]";
                     end
                 end
             end
@@ -748,12 +771,13 @@ classdef QUSConfigurationLogic
                     item = items(itemIndex);
                     if strcmp(item.section, section)
                         lines(end + 1) = "  " + item.parameter + ': ' + ...
-                            QUSConfigurationLogic.formatValue(item.value);
+                            QUSConfigurationLogic.formatValueForParameter(item.parameter, item.value);
                     end
                 end
             end
         end
-
+        
+        %tiene que ver con la GUI
         function items = records(configuration)
             configuration.sensor = QUSConfigurationLogic.normalizeSensorSettings(configuration.sensor);
             items = struct('section', {}, 'parameter', {}, 'value', {});
@@ -776,8 +800,11 @@ classdef QUSConfigurationLogic
             items(end + 1) = add('Transductor emisor', 'Tipo', string(configuration.transducer.type));
             items(end + 1) = add('Transductor emisor', 'Señal', string(configuration.transducer.signal));
             items(end + 1) = add('Transductor emisor', 'Modo de haz', string(configuration.transducer.beam_mode));
-            items(end + 1) = add('Transductor emisor', 'Frecuencia [Hz]', configuration.transducer.frequency);
-            items(end + 1) = add('Transductor emisor', 'Amplitud [Pa]', configuration.transducer.amplitude);
+            
+            % Los valores permanecen en SI dentro de la configuración. Solo
+            % se convierten al mostrarlos en el plan de experimentos.
+            items(end + 1) = add('Transductor emisor', 'Frecuencia [MHz]', configuration.transducer.frequency);
+            items(end + 1) = add('Transductor emisor', 'Amplitud [MPa]', configuration.transducer.amplitude);
             items(end + 1) = add('Transductor emisor', 'N.º ciclos', configuration.transducer.cycles);
             items(end + 1) = add('Transductor emisor', 'Foco [m]', configuration.transducer.source_focus);
             items(end + 1) = add('Transductor emisor', 'Pitch [m]', configuration.transducer.element_pitch);
@@ -824,6 +851,24 @@ classdef QUSConfigurationLogic
             text = strjoin(parts, ', ');
         end
 
+        function text = formatValuesForParameter(parameter, values)
+            parts = strings(1, numel(values));
+            for index = 1:numel(values)
+                parts(index) = QUSConfigurationLogic.formatValueForParameter(parameter, values(index));
+            end
+            text = strjoin(parts, ', ');
+        end
+        
+        % Las colas y los .mat siempre guardan SI. Esta función afecta
+        % únicamente la presentación para que coincida con la GUI.
+        function text = formatValueForParameter(parameter, value)
+            switch string(parameter)
+                case {"Frecuencia [MHz]", "Amplitud [MPa]"}
+                    value = value / 1e6;
+            end
+            text = QUSConfigurationLogic.formatValue(value);
+        end
+
         function text = formatValue(value)
             if islogical(value)
                 text = string(value);
@@ -833,11 +878,26 @@ classdef QUSConfigurationLogic
                 text = string(value);
             end
         end
-
+        
+        %Se genera cola vacia.
         function queue = emptyQueue()
             queue = struct('section', {}, 'parameter', {}, 'values', {}, 'reference', {});
         end
-
+        
+        function queue = normalizeQueueUnitLabels(queue)
+            % Actualiza solo las etiquetas de archivos de configuración
+            % previos. Sus valores siguen siendo Hz y Pa y no se modifican.
+            for index = 1:numel(queue)
+                switch string(queue(index).parameter)
+                    case "Frecuencia [Hz]"
+                        queue(index).parameter = 'Frecuencia [MHz]';
+                    case "Amplitud [Pa]"
+                        queue(index).parameter = 'Amplitud [MPa]';
+                end
+            end
+        end
+        
+        %Algunas configuraciones mas avanzadas. 
         function advanced = advancedFromReference(reference)
             advanced.medium = struct('hom_alpha', reference.medium.hom_alpha, ...
                 'density_std', reference.medium.density_std, 'alpha_power', reference.medium.alpha_power, ...
@@ -852,7 +912,8 @@ classdef QUSConfigurationLogic
             advanced.reproducibility = reference.reproducibility;
             advanced.output = reference.output;
         end
-
+        
+        %Se aplican los cambios en la app de los valores cambiados
         function applyConfiguration(app, configuration)
             app.DimensionesEditField.Value = configuration.geometry.grid_size_x;
             app.ResolucinEditField.Value = configuration.geometry.ppw;
@@ -865,8 +926,10 @@ classdef QUSConfigurationLogic
             QUSConfigurationLogic.setDropDown(app.TipoDropDown, configuration.transducer.type);
             QUSConfigurationLogic.setDropDown(app.SealDropDown, configuration.transducer.signal);
             QUSConfigurationLogic.setDropDown(app.MododehazDropDown, configuration.transducer.beam_mode);
-            app.FrecuenciaEditField.Value = configuration.transducer.frequency;
-            app.AmplitudEditField_2.Value = configuration.transducer.amplitude;
+            % Configuraciones existentes se guardaron en Hz y Pa. Convertir
+            % únicamente al cargarlas en los campos de la interfaz.
+            app.FrecuenciaEditField.Value = configuration.transducer.frequency / 1e6;
+            app.AmplitudEditField_2.Value = configuration.transducer.amplitude / 1e6;
             app.NciclosEditField.Value = configuration.transducer.cycles;
             QUSConfigurationLogic.setDropDown(app.TipoDropDown_2, configuration.sensor.type);
             SensorPanelLogic.updateForSensorType(app);
@@ -879,10 +942,10 @@ classdef QUSConfigurationLogic
             QUSConfigurationLogic.configureRealizationControls(app, configuration.reproducibility);
         end
 
+        % Traduce la estructura de la GUI a los nombres del pipeline
+        % original. Esto hace que el archivo MAT sea auditable por sí
+        % mismo y evita números literales dispersos en el .m generado.
         function parameters = pipelineParametersFromConfiguration(configuration)
-            % Traduce la estructura de la GUI a los nombres del pipeline
-            % original. Esto hace que el archivo MAT sea auditable por sí
-            % mismo y evita números literales dispersos en el .m generado.
             parameters = struct( ...
                 'c0', configuration.medium.sound_speed, ...
                 'rho0', configuration.medium.density, ...
@@ -928,9 +991,10 @@ classdef QUSConfigurationLogic
             end
         end
 
+        % El MAT queda disponible para Open Config, pero el pipeline se
+        % genera autocontenido para poder enviarlo solo al cluster.
         function writePipelineScript(pipelinePath, ~, configuration)
-            % El MAT queda disponible para Open Config, pero el pipeline se
-            % genera autocontenido para poder enviarlo solo al cluster.
+
             reference = configuration.reference;
             if ~strcmpi(reference.medium.model, 'Homogeneo')
                 error(['El generador actual crea el pipeline homogéneo de k-Wave. ' ...
@@ -1136,7 +1200,8 @@ classdef QUSConfigurationLogic
             fprintf(fileId, '%s\n', lines);
             clear cleanup
         end
-
+        
+        %Para los logs
         function path = queuePath(item)
             path = '';
             key = [char(item.section), '|', char(item.parameter)];
@@ -1148,8 +1213,8 @@ classdef QUSConfigurationLogic
                  'Medio acústico|Velocidad de sonido [m/s]', 'Medio acústico|Densidad [kg/m^3]', ...
                  'Medio acústico|Atenuación [dB/(MHz^y cm)]', 'Medio acústico|Desviación de densidad', ...
                  'Medio acústico|Alpha power', 'Medio acústico|Modo de absorción', ...
-                 'Medio acústico|Velocidad de referencia [m/s]', 'Transductor emisor|Frecuencia [Hz]', ...
-                 'Transductor emisor|Amplitud [Pa]', 'Transductor emisor|N.º ciclos', ...
+                 'Medio acústico|Velocidad de referencia [m/s]', 'Transductor emisor|Frecuencia [MHz]', ...
+                 'Transductor emisor|Amplitud [MPa]', 'Transductor emisor|N.º ciclos', ...
                  'Transductor emisor|Foco [m]', 'Transductor emisor|Pitch [m]', ...
                  'Transductor emisor|Ancho [m]', 'Transductor emisor|F-number Tx', ...
                  'Transductor emisor|F-number Rx', 'Transductor emisor|Líneas de escaneo', ...
@@ -1175,7 +1240,8 @@ classdef QUSConfigurationLogic
                 path = paths(key);
             end
         end
-
+        
+        %para generar una lista valida al .m
         function literal = matlabCellLiteral(values)
             elements = strings(1, numel(values));
             for index = 1:numel(values)
@@ -1183,7 +1249,8 @@ classdef QUSConfigurationLogic
             end
             literal = '{' + strjoin(elements, ', ') + '}';
         end
-
+       
+        %para valores validos al .m
         function literal = matlabLiteral(value)
             if islogical(value)
                 literal = string(lower(mat2str(value)));
@@ -1197,10 +1264,11 @@ classdef QUSConfigurationLogic
                 literal = "'" + QUSConfigurationLogic.escapeMatlabText(value) + "'";
             end
         end
-
+        
+        % Serializa una estructura como asignaciones MATLAB legibles, para que 
+        % no se necesite usar un .mat adicional para generar el .m .
         function lines = matlabStructureAssignments(variableName, value)
-            % Serializa una estructura como asignaciones MATLAB legibles.
-            % Es el snapshot autónomo que permite ejecutar el M sin su MAT.
+            
             lines = string(variableName) + " = struct;";
             fields = fieldnames(value);
             for index = 1:numel(fields)
@@ -1216,10 +1284,10 @@ classdef QUSConfigurationLogic
                 end
             end
         end
-
+        
+        % valores literales que viajarán en el m.
+        % El MAT permanece solo como formato de lectura para Open Config.
         function values = pipelineCaseValues(parameters, isReference, simulationName)
-            % Snapshot de un caso: valores literales que viajarán en el M.
-            % El MAT permanece solo como formato de lectura para Open Config.
             if isReference
                 nRefs = parameters.nRefsReference;
             else
@@ -1246,10 +1314,11 @@ classdef QUSConfigurationLogic
                 'directivity_size_factor', parameters.directivity_size_factor, ...
                 'directivity_angle', parameters.directivity_angle, 'solverName', parameters.solverName);
         end
-
+        
+        % Este es solo el formato para que sea lo mas parecido al pipeline
+        % original.
         function lines = generatedCaseParametersFunction(cases, isAlphaSweep)
-            % Encapsula las variaciones de la GUI al final del pipeline. Así
-            % el cuerpo principal conserva la organización del baseline.
+            
             lines = [ ...
                 "function parameters = getGuiCaseParameters(ii, refValues)"; ...
                 "    % Snapshot autónomo de los valores seleccionados en la GUI."; ...
@@ -1279,7 +1348,8 @@ classdef QUSConfigurationLogic
                 "    end"; ...
                 "end"];
         end
-
+        
+        %transforma los parámetros de un caso en líneas de código MATLAB listas para escribir en un pipeline.
         function lines = pipelineLiteralAssignments(parameters, isReference, simulationName)
             % Conservado para compatibilidad con herramientas internas.
             values = QUSConfigurationLogic.pipelineCaseValues(parameters, isReference, simulationName);
@@ -1291,7 +1361,8 @@ classdef QUSConfigurationLogic
                     QUSConfigurationLogic.matlabLiteral(values.(fieldName)) + ";";
             end
         end
-
+        
+        %Logica del save
         function cases = materializeExperimentCases(reference, queue)
             % Expande la cola en Save; el pipeline del cluster recibe ya los
             % casos concretos, no la lógica de configuración de la GUI.
@@ -1341,7 +1412,8 @@ classdef QUSConfigurationLogic
             cases(end).isReference = true;
             cases(end).tag = 'reference';
         end
-
+        
+        % transforma los parámetros de un caso en líneas de código MATLAB listas para escribir en un pipeline.
         function name = materializedSimulationName(caseInfo)
             parameters = QUSConfigurationLogic.pipelineParametersFromConfiguration(caseInfo.configuration);
             if caseInfo.isAlphaSweep
@@ -1358,7 +1430,8 @@ classdef QUSConfigurationLogic
                 name = ['homogeneous_target_', caseInfo.tag];
             end
         end
-
+        
+        % convierte cualquier valor en texto seguro para usar dentro de nombres de archivos y carpetas.
         function token = valueToken(value)
             if isnumeric(value)
                 token = strrep(num2str(value, '%.8g'), '.', 'p');
@@ -1369,11 +1442,13 @@ classdef QUSConfigurationLogic
                 token = regexprep(char(string(value)), '[^A-Za-z0-9_-]', '_');
             end
         end
-
+        
+        % prepara un texto para insertarlo de forma segura dentro de código MATLAB generado.
         function text = escapeMatlabText(value)
             text = strrep(char(string(value)), '''', '''''');
         end
-
+        
+        %Folder donde se guardan los scripts
         function folder = codeFolder(app, experimentFolderName)
             if isprop(app, 'Tree') && isprop(app, 'UIFigure')
                 parentFolder = ProjectExplorerLogic.getOutputParentFolder(app);
@@ -1382,7 +1457,7 @@ classdef QUSConfigurationLogic
             end
             folder = fullfile(parentFolder, experimentFolderName);
         end
-
+        % transforma los parámetros de un caso en líneas de código MATLAB listas para escribir en un pipeline.
         function lines = generatedHelperFunctions()
             lines = [ ...
                 "function saveMediumPreview(kgrid, medium, base_translation, outputFolder, iRef)"; ...
@@ -1413,14 +1488,16 @@ classdef QUSConfigurationLogic
                 "    medium.alpha_coeff = alpha * ones(Nx, Ny);"; ...
                 "end"];
         end
-
+        
+        %Guarda el archivo
         function name = safeFileName(name)
             name = regexprep(char(name), '[^A-Za-z0-9_-]', '_');
             if isempty(name)
-                name = 'qus_benchmark';
+                name = 'qus_benchmark'; %Default
             end
         end
-
+        
+        %Funcion para encontrar el nombre de un archivo
         function fileName = getFileName(filePath)
             [~, name, extension] = fileparts(filePath);
             fileName = [name, extension];
@@ -1448,13 +1525,13 @@ classdef QUSConfigurationLogic
             field.Layout.Row = row;
             field.Layout.Column = 2;
         end
-
+        
         function field = checkBoxField(parent, row, labelText, value)
             field = uicheckbox(parent, 'Text', labelText, 'Value', value);
             field.Layout.Row = row;
             field.Layout.Column = [1 2];
         end
-
+        
         function dialogButtons(dialog, applyCallback)
             apply = uibutton(dialog, 'push', 'Text', 'Aplicar', ...
                 'Position', [290 15 100 28], 'ButtonPushedFcn', applyCallback);
@@ -1462,7 +1539,8 @@ classdef QUSConfigurationLogic
             uibutton(dialog, 'push', 'Text', 'Cancelar', 'Position', [400 15 90 28], ...
                 'ButtonPushedFcn', @(~,~) delete(dialog));
         end
-
+        
+        %Mostrar algun error de estado
         function showError(app, message)
             app.EstadoEditField.Value = 'Configuración inválida';
             uialert(app.UIFigure, message, 'No se pudo completar la acción');
