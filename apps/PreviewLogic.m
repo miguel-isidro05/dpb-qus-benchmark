@@ -154,6 +154,7 @@ classdef PreviewLogic
             configuration.emitterAxial = state.advanced.transducer.base_translation_x;
             configuration.emitterLateral = state.advanced.transducer.base_translation_y;
             configuration.rotation = state.advanced.transducer.rotation;
+            configuration.nLines = state.advanced.transducer.n_lines;
             configuration.densityStd = state.advanced.medium.density_std;
             configuration.homAlpha = state.advanced.medium.hom_alpha;
             configuration.rngSeed = state.advanced.reproducibility.rng_seed;
@@ -167,7 +168,7 @@ classdef PreviewLogic
             end
 
             PreviewLogic.drawDomain(axesHandle, configuration, true);
-            title(axesHandle, '2-D domain, PML and transmitter');
+            title(axesHandle, 'Physical k-Wave grid, external PML and transducer');
         end
 
         function drawMediumDomain(axesHandle, configuration)
@@ -177,9 +178,8 @@ classdef PreviewLogic
                 return
             end
 
-            % Esta vista representa solo el área física y la PML del medio.
             PreviewLogic.drawDomain(axesHandle, configuration, false);
-            title(axesHandle, 'Medium domain and PML');
+            title(axesHandle, 'Physical medium grid and external PML');
         end
 
         function drawMediumProperties(handles, configuration)
@@ -193,9 +193,9 @@ classdef PreviewLogic
                 return
             end
 
-            lateral = linspace(-configuration.lateralSize / 2, ...
-                configuration.lateralSize / 2, 160) * 100;
-            axial = linspace(0, configuration.axialSize, 200) * 100;
+            frame = PreviewLogic.geometryFrame(configuration);
+            lateral = linspace(frame.lateralMin, frame.lateralMax, 160) * 100;
+            axial = linspace(frame.axialMin, frame.axialMax, 200) * 100;
             soundSpeed = configuration.soundSpeed * ones(numel(axial), numel(lateral));
 
             % Mismo medio homogéneo del pipeline. El stream local conserva
@@ -206,11 +206,11 @@ classdef PreviewLogic
             absorption = configuration.homAlpha * ones(numel(axial), numel(lateral));
 
             PreviewLogic.drawPropertyMap(handles.soundSpeedAxes, lateral, axial, soundSpeed, ...
-                'Sound speed', 'm/s', []);
+                'Sound speed: physical grid', 'm/s', []);
             PreviewLogic.drawPropertyMap(handles.densityAxes, lateral, axial, density, ...
-                'Density', 'kg/m^3', []);
+                'Density: physical grid', 'kg/m^3', []);
             PreviewLogic.drawPropertyMap(handles.absorptionAxes, lateral, axial, absorption, ...
-                'Absorption', 'dB/cm/MHz', [0.4, 1.0]);
+                'Absorption: physical grid', 'dB/cm/MHz', [0.4, 1.0]);
         end
 
         function drawPropertyMap(axesHandle, lateral, axial, mediumMap, titleText, colorbarText, limits)
@@ -232,9 +232,8 @@ classdef PreviewLogic
             colorbarHandle.Label.String = colorbarText;
             title(axesHandle, titleText);
             
-            % Convención exacta del pipeline: x lateral y z axial.
-            xlabel(axesHandle, 'x [cm]');
-            ylabel(axesHandle, 'z [cm]');
+            xlabel(axesHandle, 'x lateral [cm]');
+            ylabel(axesHandle, 'z from transducer [cm]');
         end
 
         function drawDomain(axesHandle, configuration, showEmitter)
@@ -242,27 +241,35 @@ classdef PreviewLogic
             box(axesHandle, 'on');
             hold(axesHandle, 'on');
 
-            axialCm = configuration.axialSize * 100;
-            lateralCm = configuration.lateralSize * 100;
-            pmlAxialCm = configuration.pmlLayers * configuration.dx * 100;
-            pmlLateralCm = configuration.pmlLayers * configuration.dx * 100;
+            frame = PreviewLogic.geometryFrame(configuration);
 
-            rectangle(axesHandle, 'Position', [-lateralCm / 2, 0, lateralCm, axialCm], ...
-                'EdgeColor', [0.15 0.15 0.15], 'LineWidth', 1.2, 'LineStyle', '-');
+            % El pipeline usa PMLInside = false. La capa absorbente se
+            % encuentra fuera de la malla física, no dentro de ella.
             rectangle(axesHandle, 'Position', ...
-                [-lateralCm / 2 + pmlLateralCm, pmlAxialCm, ...
-                 lateralCm - 2 * pmlLateralCm, axialCm - 2 * pmlAxialCm], ...
-                'EdgeColor', [0.35 0.35 0.35], 'LineWidth', 1, 'LineStyle', '--');
+                [(frame.lateralMin - frame.pml) * 100, ...
+                 (frame.axialMin - frame.pml) * 100, ...
+                 (frame.lateralSize + 2 * frame.pml) * 100, ...
+                 (frame.axialSize + 2 * frame.pml) * 100], ...
+                'FaceColor', [0.92 0.92 0.92], ...
+                'EdgeColor', [0.45 0.45 0.45], 'LineWidth', 1.1, 'LineStyle', '--');
+            rectangle(axesHandle, 'Position', ...
+                [frame.lateralMin * 100, frame.axialMin * 100, ...
+                 frame.lateralSize * 100, frame.axialSize * 100], ...
+                'FaceColor', [1 1 1], ...
+                'EdgeColor', [0.15 0.15 0.15], 'LineWidth', 1.3, 'LineStyle', '-');
 
             if showEmitter
                 PreviewLogic.drawEmitter(axesHandle, configuration);
                 PreviewLogic.drawFocus(axesHandle, configuration);
+                PreviewLogic.drawGeometryLegend(axesHandle);
+                PreviewLogic.drawArrayCoverageWarning(axesHandle, configuration, frame);
             end
 
             axis(axesHandle, 'equal');
-            PreviewLogic.setGeometryLimits(axesHandle, configuration, showEmitter);
-            xlabel(axesHandle, 'x [cm]');
-            ylabel(axesHandle, 'z [cm]');
+            PreviewLogic.setGeometryLimits(axesHandle, frame);
+            set(axesHandle, 'YDir', 'reverse');
+            xlabel(axesHandle, 'x lateral [cm]');
+            ylabel(axesHandle, 'z from transducer [cm]');
             grid(axesHandle, 'on');
             hold(axesHandle, 'off');
         end
@@ -291,7 +298,8 @@ classdef PreviewLogic
                     lineWidth = 3;
                 end
                 line(axesHandle, [firstPoint(2), lastPoint(2)] * 100, ...
-                    [firstPoint(1), lastPoint(1)] * 100, ...
+                    [firstPoint(1) - configuration.emitterAxial, ...
+                     lastPoint(1) - configuration.emitterAxial] * 100, ...
                     'Color', color, 'LineWidth', lineWidth);
             end
         end
@@ -300,30 +308,60 @@ classdef PreviewLogic
             normal = [cos(configuration.rotation), -sin(configuration.rotation)];
             focusPoint = [configuration.emitterAxial, configuration.emitterLateral] + ...
                 configuration.focus * normal;
-            plot(axesHandle, focusPoint(2) * 100, focusPoint(1) * 100, ...
+            plot(axesHandle, focusPoint(2) * 100, ...
+                (focusPoint(1) - configuration.emitterAxial) * 100, ...
                 'o', 'MarkerSize', 6, 'MarkerFaceColor', [0.85 0.35 0], ...
                 'MarkerEdgeColor', [0.25 0.12 0]);
         end
 
-        function setGeometryLimits(axesHandle, configuration, includeEmitter)
-            axial = configuration.axialSize * 100;
-            lateral = configuration.lateralSize * 100;
-            if ~includeEmitter
-                xlim(axesHandle, [-lateral / 2, lateral / 2]);
-                ylim(axesHandle, [0, axial]);
-                return
-            end
-            focusAxial = (configuration.emitterAxial + ...
-                configuration.focus * cos(configuration.rotation)) * 100;
-            emitterAxial = configuration.emitterAxial * 100;
-            emitterLateral = configuration.emitterLateral * 100;
+        function frame = geometryFrame(configuration)
+            % kWaveGrid está centrado en cero. Este marco cambia el origen
+            % visual a la superficie del transductor, donde z = 0.
+            frame.axialSize = configuration.axialSize;
+            frame.lateralSize = configuration.lateralSize;
+            frame.pml = configuration.pmlLayers * configuration.dx;
+            frame.lateralMin = -configuration.lateralSize / 2;
+            frame.lateralMax = configuration.lateralSize / 2;
+            frame.axialMin = -configuration.axialSize / 2 - ...
+                configuration.emitterAxial;
+            frame.axialMax = configuration.axialSize / 2 - ...
+                configuration.emitterAxial;
+        end
 
-            xMargin = max(2, 0.08 * lateral);
-            yMargin = max(2, 0.08 * axial);
-            xlim(axesHandle, [min(-lateral / 2, emitterLateral) - xMargin, ...
-                max(lateral / 2, emitterLateral) + xMargin]);
-            ylim(axesHandle, [min([0, emitterAxial, focusAxial]) - yMargin, ...
-                max([axial, emitterAxial, focusAxial]) + yMargin]);
+        function setGeometryLimits(axesHandle, frame)
+            margin = max(0.002, 0.08 * max(frame.axialSize, frame.lateralSize));
+            xlim(axesHandle, [(frame.lateralMin - frame.pml - margin) * 100, ...
+                (frame.lateralMax + frame.pml + margin) * 100]);
+            ylim(axesHandle, [(frame.axialMin - frame.pml - margin) * 100, ...
+                (frame.axialMax + frame.pml + margin) * 100]);
+        end
+
+        function drawGeometryLegend(axesHandle)
+            transmitter = plot(axesHandle, NaN, NaN, '-', ...
+                'Color', [0 0.35 0.75], 'LineWidth', 3);
+            receiver = plot(axesHandle, NaN, NaN, '-', ...
+                'Color', [0.1 0.1 0.1], 'LineWidth', 2);
+            focus = plot(axesHandle, NaN, NaN, 'o', ...
+                'MarkerFaceColor', [0.85 0.35 0], ...
+                'MarkerEdgeColor', [0.25 0.12 0]);
+            legend(axesHandle, [transmitter, receiver, focus], ...
+                {'Active transmit', 'Receive-only', 'Transmit focus'}, ...
+                'Location', 'southoutside');
+        end
+
+        function drawArrayCoverageWarning(axesHandle, configuration, frame)
+            apertureRx = configuration.focus / configuration.fNumberRx;
+            elementCount = max(1, floor(apertureRx / configuration.elementPitch));
+            halfReceiverAperture = elementCount * configuration.elementPitch / 2;
+            halfScanRange = ((configuration.nLines - 1) / 2) * ...
+                configuration.elementPitch;
+
+            if halfScanRange + halfReceiverAperture > frame.lateralSize / 2
+                text(axesHandle, 0, (frame.axialMax + frame.pml) * 100, ...
+                    'Warning: edge scanlines exceed the lateral grid width.', ...
+                    'HorizontalAlignment', 'center', 'VerticalAlignment', 'bottom', ...
+                    'Color', [0.70 0.15 0.05], 'FontSize', 9, 'FontWeight', 'bold');
+            end
         end
 
         function drawSignal(timeAxes, frequencyAxes, configuration)
