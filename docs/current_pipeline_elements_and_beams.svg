@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="940" viewBox="0 0 1400 940">
+  <style>
+    .title{font:700 31px Arial,sans-serif;fill:#152238}.h{font:700 22px Arial,sans-serif;fill:#152238}.t{font:18px Arial,sans-serif;fill:#34445a}.s{font:15px Arial,sans-serif;fill:#526178}.n{font:700 15px Arial,sans-serif;fill:#fff}.eq{font:700 20px Arial,sans-serif;fill:#075985}.cap{font:700 16px Arial,sans-serif;fill:#334155}
+  </style>
+  <rect width="1400" height="940" fill="#f8fafc"/>
+  <text x="55" y="55" class="title">Tu pipeline actual: elementos y beams</text>
+  <text x="55" y="84" class="t">Ejemplo con Focal depth = 40 mm, pitch = 0.3 mm, F-number Tx = 4, F-number Rx = 2 y Number of beams = 128.</text>
+
+  <rect x="55" y="112" width="1290" height="114" rx="12" fill="#e0f2fe" stroke="#7dd3fc" stroke-width="2"/>
+  <text x="85" y="149" class="h">1. Se calculan los tamaños de apertura una sola vez</text>
+  <text x="85" y="184" class="eq">Number of elements = Receive elements = floor(40 / (2 × 0.3)) = 66</text>
+  <text x="785" y="184" class="eq">Active Tx elements = floor(40 / (4 × 0.3)) = 33</text>
+  <text x="85" y="211" class="s">El pipeline no tiene un N físico independiente: crea 66 elementos y usa los 66 como canales Rx.</text>
+
+  <text x="55" y="278" class="h">2. Una adquisición, por ejemplo el beam 37</text>
+  <text x="55" y="307" class="t">Se construye un arreglo de 66 elementos. Solo los 33 centrales transmiten. Los 66 reciben el eco.</text>
+  <g transform="translate(105 337)">
+    <rect x="0" y="0" width="1120" height="82" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+    <g stroke="#475569" stroke-width="1">
+      <rect x="24" y="16" width="22" height="50" fill="#94a3b8"/><rect x="49" y="16" width="22" height="50" fill="#94a3b8"/><rect x="74" y="16" width="22" height="50" fill="#94a3b8"/><rect x="99" y="16" width="22" height="50" fill="#94a3b8"/>
+      <rect x="124" y="16" width="22" height="50" fill="#94a3b8"/><rect x="149" y="16" width="22" height="50" fill="#94a3b8"/><rect x="174" y="16" width="22" height="50" fill="#94a3b8"/><rect x="199" y="16" width="22" height="50" fill="#94a3b8"/>
+      <rect x="224" y="16" width="22" height="50" fill="#94a3b8"/><rect x="249" y="16" width="22" height="50" fill="#94a3b8"/><rect x="274" y="16" width="22" height="50" fill="#94a3b8"/><rect x="299" y="16" width="22" height="50" fill="#94a3b8"/>
+      <rect x="324" y="16" width="22" height="50" fill="#94a3b8"/><rect x="349" y="16" width="22" height="50" fill="#94a3b8"/><rect x="374" y="16" width="22" height="50" fill="#94a3b8"/><rect x="399" y="16" width="22" height="50" fill="#94a3b8"/>
+      <rect x="424" y="16" width="22" height="50" fill="#059669"/><rect x="449" y="16" width="22" height="50" fill="#059669"/><rect x="474" y="16" width="22" height="50" fill="#059669"/><rect x="499" y="16" width="22" height="50" fill="#059669"/>
+      <rect x="524" y="16" width="22" height="50" fill="#059669"/><rect x="549" y="16" width="22" height="50" fill="#059669"/><rect x="574" y="16" width="22" height="50" fill="#059669"/><rect x="599" y="16" width="22" height="50" fill="#059669"/>
+      <rect x="624" y="16" width="22" height="50" fill="#059669"/><rect x="649" y="16" width="22" height="50" fill="#059669"/><rect x="674" y="16" width="22" height="50" fill="#059669"/><rect x="699" y="16" width="22" height="50" fill="#059669"/>
+      <rect x="724" y="16" width="22" height="50" fill="#059669"/><rect x="749" y="16" width="22" height="50" fill="#059669"/><rect x="774" y="16" width="22" height="50" fill="#059669"/><rect x="799" y="16" width="22" height="50" fill="#059669"/>
+      <rect x="824" y="16" width="22" height="50" fill="#94a3b8"/><rect x="849" y="16" width="22" height="50" fill="#94a3b8"/><rect x="874" y="16" width="22" height="50" fill="#94a3b8"/><rect x="899" y="16" width="22" height="50" fill="#94a3b8"/>
+      <rect x="924" y="16" width="22" height="50" fill="#94a3b8"/><rect x="949" y="16" width="22" height="50" fill="#94a3b8"/><rect x="974" y="16" width="22" height="50" fill="#94a3b8"/><rect x="999" y="16" width="22" height="50" fill="#94a3b8"/>
+      <rect x="1024" y="16" width="22" height="50" fill="#94a3b8"/><rect x="1049" y="16" width="22" height="50" fill="#94a3b8"/><rect x="1074" y="16" width="22" height="50" fill="#94a3b8"/>
+    </g>
+  </g>
+  <rect x="470" y="439" width="360" height="29" rx="5" fill="#d1fae5"/><text x="560" y="460" class="cap">33 centrales: Tx activo + Rx</text>
+  <text x="105" y="458" class="s">Rx solamente</text><text x="1020" y="458" class="s">Rx solamente</text>
+  <text x="105" y="490" class="t">Gris: no emite, pero el sensor registra su eco.</text>
+  <text x="105" y="518" class="t">Verde: emite el pulso focalizado y también registra el eco.</text>
+
+  <text x="55" y="579" class="h">3. El mismo arreglo completo se desplaza para cada beam</text>
+  <text x="55" y="607" class="t">No se desplaza solo Tx. Se mueve el kWaveArray completo, 0.3 mm por adquisición.</text>
+  <g transform="translate(150 640)">
+    <rect x="0" y="0" width="520" height="36" rx="6" fill="#dbeafe" stroke="#2563eb"/><rect x="195" y="0" width="130" height="36" rx="3" fill="#059669"/>
+    <text x="-120" y="25" class="t">Beam 1</text><text x="690" y="25" class="s">posición y₁</text>
+    <rect x="42" y="68" width="520" height="36" rx="6" fill="#dbeafe" stroke="#2563eb"/><rect x="237" y="68" width="130" height="36" rx="3" fill="#059669"/>
+    <text x="-120" y="93" class="t">Beam 2</text><text x="582" y="93" class="s">y₂ = y₁ + pitch</text>
+    <rect x="84" y="136" width="520" height="36" rx="6" fill="#dbeafe" stroke="#2563eb"/><rect x="279" y="136" width="130" height="36" rx="3" fill="#059669"/>
+    <text x="-120" y="161" class="t">Beam 3</text><text x="624" y="161" class="s">y₃ = y₂ + pitch</text>
+  </g>
+  <text x="900" y="665" class="h">Datos guardados</text>
+  <text x="900" y="701" class="eq">rf_prebf(tiempo, Rx, beam)</text>
+  <text x="900" y="735" class="t">dimensión: Nt × 66 × 128</text>
+  <text x="900" y="765" class="s">Cada beam aporta señales de 66 canales.</text>
+  <text x="900" y="789" class="s">La tercera dimensión junta las 128 posiciones.</text>
+  <rect x="885" y="814" width="400" height="62" rx="10" fill="#ecfeff" stroke="#0891b2"/>
+  <text x="907" y="840" class="cap">Resultado: 128 adquisiciones</text>
+  <text x="907" y="863" class="s">con distinta posición lateral, no 128 Tx simultáneos.</text>
+</svg>

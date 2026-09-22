@@ -3,6 +3,12 @@ classdef PreviewLogic
     methods (Static)
 
         function initialize(app)
+            % Inicializa los valores físicos del baseline antes de dibujar.
+            % startupFcn crea el preview antes de su llamada final a onTest;
+            % sin este paso los ejes aparecen vacíos aunque exista una
+            % configuración inicial definida para la app.
+            QUSConfigurationLogic.onTest(app);
+
             % Mantiene la nomenclatura científica de las tres pestañas.
             app.GeometricoTab.Title = 'Geometric';
             if isprop(app, 'PropiedadesTab')
@@ -30,6 +36,11 @@ classdef PreviewLogic
                 PreviewLogic.createPreviewAxes(app);
                 PreviewLogic.installRefreshCallbacks(app);
                 handles = getappdata(app.UIFigure, 'PreviewLogicHandles');
+            end
+
+            if ~PreviewLogic.hasSavedConfiguration(app)
+                PreviewLogic.drawEmptyPreview(handles);
+                return
             end
 
             configuration = PreviewLogic.readConfiguration(app);
@@ -88,30 +99,89 @@ classdef PreviewLogic
                 handles.densityAxes = propertyAxes(2);
                 handles.absorptionAxes = propertyAxes(3);
             end
+            axesHandles = [geometryAxes, mediumAxes, timeAxes, frequencyAxes, propertyAxes];
+            for axesIndex = 1:numel(axesHandles)
+                if isprop(axesHandles(axesIndex), 'Toolbar')
+                    axesHandles(axesIndex).Toolbar.Visible = 'off';
+                end
+            end
             setappdata(app.UIFigure, 'PreviewLogicHandles', handles);
+        end
+
+        function hasConfiguration = hasSavedConfiguration(app)
+            hasConfiguration = false;
+            if isappdata(app.UIFigure, 'QUSConfigurationState')
+                state = getappdata(app.UIFigure, 'QUSConfigurationState');
+                hasConfiguration = state.referenceDefined;
+            end
+        end
+
+        function drawEmptyPreview(handles)
+            PreviewLogic.drawEmptyGrid(handles.geometryAxes, ...
+                'Geometry preview', 'x [cm]', 'z [cm]');
+            PreviewLogic.drawEmptyGrid(handles.mediumAxes, ...
+                'Medium preview', 'x [cm]', 'z [cm]');
+            if isfield(handles, 'soundSpeedAxes') && isvalid(handles.soundSpeedAxes)
+                PreviewLogic.drawEmptyGrid(handles.soundSpeedAxes, ...
+                    'Sound speed', 'x lateral [cm]', 'z [cm]');
+                PreviewLogic.drawEmptyGrid(handles.densityAxes, ...
+                    'Density', 'x lateral [cm]', 'z [cm]');
+                PreviewLogic.drawEmptyGrid(handles.absorptionAxes, ...
+                    'ACS', 'x lateral [cm]', 'z [cm]');
+            end
+            PreviewLogic.drawEmptyGrid(handles.timeAxes, ...
+                'Signal preview', 'Time [µs]', 'Pressure [MPa]');
+            PreviewLogic.drawEmptyGrid(handles.frequencyAxes, ...
+                'Spectrum preview', 'Frequency [MHz]', 'Amplitude [MPa]');
+        end
+
+        function drawEmptyGrid(axesHandle, titleText, xLabelText, yLabelText)
+            cla(axesHandle);
+            colorbar(axesHandle, 'off');
+            axis(axesHandle, 'on');
+            box(axesHandle, 'on');
+            grid(axesHandle, 'on');
+            xlim(axesHandle, [0 1]);
+            ylim(axesHandle, [0 1]);
+            title(axesHandle, titleText);
+            xlabel(axesHandle, xLabelText);
+            ylabel(axesHandle, yLabelText);
         end
 
         function installRefreshCallbacks(app)
             controls = { ...
                 app.DimensionesEditField, app.ResolucinEditField, ...
                 app.PMLCantcapasEditField, app.CFLEditField, ...
-                app.TiempoEditField, ...
                 app.VelsonidoEditField, app.DensidadEditField, ...
                 app.FrecuenciaEditField, app.AmplitudEditField_2, ...
                 app.NciclosEditField, app.ModeloDropDown, ...
                 app.SealDropDown, app.MododehazDropDown};
 
             for index = 1:numel(controls)
-                controls{index}.ValueChangedFcn = @(~, ~) PreviewLogic.refresh(app);
+                if controls{index} == app.ModeloDropDown
+                    % El modelo cambia la estructura del medio, pero el
+                    % preview se redibuja únicamente al pulsar Set o elegir
+                    % un Group ya guardado.
+                    controls{index}.ValueChangedFcn = @(~, ~) ...
+                        QUSConfigurationLogic.onMediumModelChanged(app);
+                else
+                    controls{index}.ValueChangedFcn = @(~, ~) ...
+                        PreviewLogic.onMainControlChanged(app);
+                end
             end
         end
 
+        function onMainControlChanged(app)
+            QUSConfigurationLogic.updateCalculatedTime(app);
+        end
+
         function configuration = readConfiguration(app)
-            configuration.axialSize = app.DimensionesEditField.Value;
+            [configuration.axialSize, configuration.lateralSize] = ...
+                QUSConfigurationLogic.currentGridSize(app);
             configuration.ppw = app.ResolucinEditField.Value;
             configuration.pmlLayers = app.PMLCantcapasEditField.Value;
             configuration.cfl = app.CFLEditField.Value;
-            configuration.depth = app.TiempoEditField.Value;
+            configuration.depth = app.DimensionesEditField.Value;
             configuration.soundSpeed = app.VelsonidoEditField.Value;
             configuration.density = app.DensidadEditField.Value;
             
@@ -157,6 +227,11 @@ classdef PreviewLogic
             configuration.nLines = state.advanced.transducer.n_lines;
             configuration.densityStd = state.advanced.medium.density_std;
             configuration.homAlpha = state.advanced.medium.hom_alpha;
+            if isfield(state.advanced.medium, 'config')
+                configuration.mediumConfig = state.advanced.medium.config;
+            else
+                configuration.mediumConfig = MediumConfigurationLogic.defaultConfig();
+            end
             configuration.rngSeed = state.advanced.reproducibility.rng_seed;
         end
 
@@ -196,21 +271,18 @@ classdef PreviewLogic
             frame = PreviewLogic.geometryFrame(configuration);
             lateral = linspace(frame.lateralMin, frame.lateralMax, 160) * 100;
             axial = linspace(frame.axialMin, frame.axialMax, 200) * 100;
-            soundSpeed = configuration.soundSpeed * ones(numel(axial), numel(lateral));
-
-            % Mismo medio homogéneo del pipeline. El stream local conserva
-            % la reproducibilidad sin cambiar la semilla global de MATLAB.
-            stream = RandStream('mt19937ar', 'Seed', max(0, round(configuration.rngSeed)));
-            density = configuration.density * (1 + configuration.densityStd * ...
-                randn(stream, numel(axial), numel(lateral)));
-            absorption = configuration.homAlpha * ones(numel(axial), numel(lateral));
+            mediumConfig = configuration.mediumConfig;
+            mediumConfig.background.sound_speed = configuration.soundSpeed;
+            mediumConfig.background.density = configuration.density;
+            [soundSpeed, density, acs] = MediumConfigurationLogic.maps( ...
+                mediumConfig, axial * 10, lateral * 10, configuration.rngSeed);
 
             PreviewLogic.drawPropertyMap(handles.soundSpeedAxes, lateral, axial, soundSpeed, ...
                 'Sound speed', 'm/s', []);
             PreviewLogic.drawPropertyMap(handles.densityAxes, lateral, axial, density, ...
                 'Density', 'kg/m^3', []);
-            PreviewLogic.drawPropertyMap(handles.absorptionAxes, lateral, axial, absorption, ...
-                'Absorption', 'dB/cm/MHz', [0.4, 1.0]);
+            PreviewLogic.drawPropertyMap(handles.absorptionAxes, lateral, axial, acs, ...
+                'ACS', 'ACS [dB/cm/MHz]', [0.35, 1.05]);
         end
 
         function drawPropertyMap(axesHandle, lateral, axial, mediumMap, titleText, colorbarText, limits)
@@ -224,16 +296,20 @@ classdef PreviewLogic
             box(axesHandle, 'on');
             grid(axesHandle, 'off');
             axesHandle.LineWidth = 1.2;
-            colormap(axesHandle, parula);
+            colormap(axesHandle, turbo(256));
             if ~isempty(limits)
                 clim(axesHandle, limits);
             end
             colorbarHandle = colorbar(axesHandle);
             colorbarHandle.Label.String = colorbarText;
+            if isequal(limits, [0.35, 1.05])
+                colorbarHandle.Ticks = 0.4:0.1:1.0;
+                colorbarHandle.TickLabels = {'0.4', '', '0.6', '', '0.8', '', '1'};
+            end
             title(axesHandle, titleText);
             
             xlabel(axesHandle, 'x lateral [cm]');
-            ylabel(axesHandle, 'z from transducer [cm]');
+            ylabel(axesHandle, 'z [cm]');
         end
 
         function drawDomain(axesHandle, configuration, showEmitter)
@@ -337,6 +413,10 @@ classdef PreviewLogic
         function drawSignal(timeAxes, frequencyAxes, configuration)
             cla(timeAxes);
             cla(frequencyAxes);
+            timeAxes.XLimMode = 'auto';
+            timeAxes.YLimMode = 'auto';
+            frequencyAxes.XLimMode = 'auto';
+            frequencyAxes.YLimMode = 'auto';
             if ~PreviewLogic.isSignalValid(configuration)
                 PreviewLogic.showIncomplete(timeAxes, 'Completa frecuencia, amplitud y ciclos.');
                 PreviewLogic.showIncomplete(frequencyAxes, 'El espectro aparecerá al definir la señal.');

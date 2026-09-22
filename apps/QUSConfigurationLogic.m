@@ -29,7 +29,9 @@ classdef QUSConfigurationLogic
             end
 
             state.advanced.reproducibility = current.reproducibility;
+            state = QUSConfigurationLogic.recordPreviewCase(app, state, current);
             QUSConfigurationLogic.storeState(app, state);
+            QUSConfigurationLogic.configureDeleteButton(app, state);
             QUSConfigurationLogic.updateExecution(app, state);
             QUSConfigurationLogic.updateStatusSummary(app, state, '');
             QUSConfigurationLogic.refreshAssociatedViews(app);
@@ -39,6 +41,49 @@ classdef QUSConfigurationLogic
             state = QUSConfigurationLogic.prepare(app);
             QUSConfigurationLogic.updateExecution(app, state);
             QUSConfigurationLogic.updateStatusSummary(app, state, '');
+        end
+
+        function onDeleteSelectedCase(app)
+            state = QUSConfigurationLogic.prepare(app);
+            caseIndex = QUSConfigurationLogic.groupIndex(app.DropDown.Value);
+            if caseIndex <= 1
+                QUSConfigurationLogic.showError(app, ...
+                    'Ref define la base de todos los casos. Para eliminarla usa Reset.');
+                return
+            end
+            deletedLabel = QUSConfigurationLogic.caseLabel(caseIndex);
+            if ~isempty(state.previewCases)
+                if caseIndex > numel(state.previewCases)
+                    QUSConfigurationLogic.showError(app, 'El caso seleccionado no existe.');
+                    return
+                end
+                state.previewCases(caseIndex) = [];
+                state.queue = QUSConfigurationLogic.rebuildQueueFromPreviewCases(state);
+                selectedIndex = min(caseIndex, numel(state.previewCases));
+                selectedConfiguration = state.previewCases(selectedIndex).configuration;
+                state.advanced = QUSConfigurationLogic.advancedFromReference(selectedConfiguration);
+                QUSConfigurationLogic.applyConfiguration(app, selectedConfiguration);
+                QUSConfigurationLogic.configureGroupSelector(app, ...
+                    numel(state.previewCases), selectedIndex);
+            elseif ~isempty(state.pipelineCases)
+                if caseIndex > numel(state.pipelineCases)
+                    QUSConfigurationLogic.showError(app, 'El caso seleccionado no existe.');
+                    return
+                end
+                state.pipelineCases(caseIndex) = [];
+                selectedIndex = min(caseIndex, numel(state.pipelineCases));
+                state = QUSConfigurationLogic.applyPipelineCase(app, state, selectedIndex);
+                QUSConfigurationLogic.configureGroupSelector(app, ...
+                    numel(state.pipelineCases), selectedIndex);
+            else
+                QUSConfigurationLogic.showError(app, 'No hay un Case que eliminar.');
+                return
+            end
+            QUSConfigurationLogic.storeState(app, state);
+            QUSConfigurationLogic.configureDeleteButton(app, state);
+            QUSConfigurationLogic.updateExecution(app, state);
+            QUSConfigurationLogic.updateStatusSummary(app, state, ...
+                sprintf('%s eliminado', deletedLabel));
             QUSConfigurationLogic.refreshAssociatedViews(app);
         end
 
@@ -47,7 +92,16 @@ classdef QUSConfigurationLogic
             state.referenceDefined = false;
             state.reference = struct();
             state.queue = QUSConfigurationLogic.emptyQueue();
+            state.pipelinePath = '';
+            state.pipelineCases = struct([]);
+            state.previewCases = struct([]);
+            state.selectedPipelineCase = [];
+            if isprop(app, 'DropDown')
+                QUSConfigurationLogic.configureGroupSelector(app, 1, 1);
+                app.DropDown.Enable = 'off';
+            end
             QUSConfigurationLogic.storeState(app, state);
+            QUSConfigurationLogic.configureDeleteButton(app, state);
             QUSConfigurationLogic.updateExecution(app, state);
             QUSConfigurationLogic.updateStatusSummary(app, state, 'Sin configuración');
             QUSConfigurationLogic.refreshAssociatedViews(app);
@@ -81,40 +135,25 @@ classdef QUSConfigurationLogic
             end
             state.advanced.reproducibility = current.reproducibility;
             QUSConfigurationLogic.storeState(app, state);
+            QUSConfigurationLogic.configureDeleteButton(app, state);
             QUSConfigurationLogic.updateExecution(app, state);
-
-            configuration = struct( ...
-                'schema_version', 'qus-benchmark-configuration-v1', ...
-                'created_at', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')), ...
-                'reference', state.reference, ...
-                'queue', state.queue, ...
-                'description', ['Configuración reproducible. No contiene RF ni resultados ' ...
-                    'de k-Wave.']);
 
             fileStem = QUSConfigurationLogic.safeFileName(state.reference.experiment.name);
             outputFolder = QUSConfigurationLogic.codeFolder(app, fileStem);
             if ~exist(outputFolder, 'dir')
                 mkdir(outputFolder);
             end
-            configurationFileName = [fileStem, '_configuration.mat'];
             pipelineFileName = [fileStem, '_pipeline.m'];
-            configurationPath = fullfile(outputFolder, configurationFileName);
             pipelinePath = fullfile(outputFolder, pipelineFileName);
-            % El MAT es el contrato entre la interfaz y el pipeline: conserva
-            % la configuración completa y un juego de variables con los
-            % nombres científicos usados por el script de k-Wave.
-            pipelineParameters = QUSConfigurationLogic.pipelineParametersFromConfiguration( ...
-                state.reference);
 
             try
-                save(configurationPath, 'configuration', 'pipelineParameters');
-                QUSConfigurationLogic.writePipelineScript(pipelinePath, configurationPath, configuration);
+                QUSConfigurationLogic.writePipelineScript(pipelinePath, state);
             catch exception
                 QUSConfigurationLogic.showError(app, exception.message);
                 return
             end
 
-            QUSConfigurationLogic.updateStatusSummary(app, state, 'Configuración guardada');
+            QUSConfigurationLogic.updateStatusSummary(app, state, 'Pipeline guardado');
             QUSConfigurationLogic.refreshAssociatedViews(app);
             if isprop(app, 'Tree') && isprop(app, 'NombreEditField')
                 ProjectExplorerLogic.selectExperimentOutputFolder(app);
@@ -122,130 +161,627 @@ classdef QUSConfigurationLogic
         end
 
         function onOpen(app)
-            state = QUSConfigurationLogic.prepare(app);
-            [fileName, folder] = uigetfile({'*.mat', 'Configuración MATLAB (*.mat)'}, ...
-                'Abrir configuración reproducible');
+            [fileName, folder] = uigetfile({'*.m', 'Pipeline MATLAB (*.m)'}, ...
+                'Abrir pipeline reproducible');
             if isequal(fileName, 0)
                 return
             end
 
-            try
-                loaded = load(fullfile(folder, fileName), 'configuration');
-                if ~isfield(loaded, 'configuration') || ...
-                        ~isfield(loaded.configuration, 'reference') || ...
-                        ~isfield(loaded.configuration, 'queue')
-                    error('El archivo no tiene el formato de configuración QUS esperado.');
-                end
+            QUSConfigurationLogic.openPipelineFile(app, fullfile(folder, fileName));
+        end
 
+        function openPipelineFile(app, pipelinePath)
+            state = QUSConfigurationLogic.prepare(app);
+            try
+                parametersByCase = QUSConfigurationLogic.readPipelineCases(pipelinePath);
+                parametersByCase = QUSConfigurationLogic.referenceFirst(parametersByCase);
                 state.referenceDefined = true;
-                state.reference = loaded.configuration.reference;
-                % Las colas antiguas usaban etiquetas Hz/Pa, aunque sus
-                % valores ya estaban correctamente almacenados en SI.
-                state.queue = QUSConfigurationLogic.normalizeQueueUnitLabels( ...
-                    loaded.configuration.queue);
-                state.advanced = QUSConfigurationLogic.advancedFromReference(state.reference);
-                QUSConfigurationLogic.applyConfiguration(app, state.reference);
+                state.queue = QUSConfigurationLogic.emptyQueue();
+                state.pipelinePath = pipelinePath;
+                state.pipelineCases = parametersByCase;
+                QUSConfigurationLogic.configureGroupSelector(app, numel(parametersByCase), 1);
+                state = QUSConfigurationLogic.applyPipelineCase(app, state, 1);
             catch exception
                 QUSConfigurationLogic.showError(app, exception.message);
                 return
             end
 
             QUSConfigurationLogic.storeState(app, state);
+            QUSConfigurationLogic.configureDeleteButton(app, state);
             QUSConfigurationLogic.updateExecution(app, state);
-            QUSConfigurationLogic.updateStatusSummary(app, state, 'Configuración cargada');
+            QUSConfigurationLogic.updateStatusSummary(app, state, 'Pipeline cargado: Ref');
             QUSConfigurationLogic.refreshAssociatedViews(app);
+        end
+
+        function onGroupSelected(app)
+            state = QUSConfigurationLogic.prepare(app);
+            caseIndex = QUSConfigurationLogic.groupIndex(app.DropDown.Value);
+            try
+                if isfield(state, 'previewCases') && ~isempty(state.previewCases)
+                    if caseIndex < 1 || caseIndex > numel(state.previewCases)
+                        error('El caso seleccionado no existe en la cola actual.');
+                    end
+                    configuration = state.previewCases(caseIndex).configuration;
+                    state.advanced = QUSConfigurationLogic.advancedFromReference(configuration);
+                    QUSConfigurationLogic.applyConfiguration(app, configuration);
+                    statusText = sprintf('Configuración en cola: %s', ...
+                        QUSConfigurationLogic.caseLabel(caseIndex));
+                elseif isfield(state, 'pipelineCases') && ~isempty(state.pipelineCases)
+                    if caseIndex < 1 || caseIndex > numel(state.pipelineCases)
+                        error('El caso seleccionado no existe en el pipeline abierto.');
+                    end
+                    state = QUSConfigurationLogic.applyPipelineCase(app, state, caseIndex);
+                    statusText = sprintf('Pipeline cargado: %s', ...
+                        QUSConfigurationLogic.caseLabel(caseIndex));
+                else
+                    return
+                end
+            catch exception
+                QUSConfigurationLogic.showError(app, exception.message);
+                return
+            end
+
+            QUSConfigurationLogic.storeState(app, state);
+            QUSConfigurationLogic.configureDeleteButton(app, state);
+            QUSConfigurationLogic.updateExecution(app, state);
+            QUSConfigurationLogic.updateStatusSummary(app, state, statusText);
+            QUSConfigurationLogic.refreshAssociatedViews(app);
+        end
+
+        function [gridSizeZ, gridSizeX] = currentGridSize(app)
+            [gridSizeZ, gridSizeX] = QUSConfigurationLogic.parseGridSize( ...
+                app.GridSizeEditField.Value);
+        end
+
+        function updateCalculatedTime(app)
+            if ~isprop(app, 'TiempoEditField') || ~isvalid(app.TiempoEditField)
+                return
+            end
+            depth = app.DimensionesEditField.Value;
+            soundSpeed = app.VelsonidoEditField.Value;
+            if isfinite(depth) && depth > 0 && isfinite(soundSpeed) && soundSpeed > 0
+                app.TiempoEditField.Value = 1e6 * (2 * depth / soundSpeed);
+            else
+                app.TiempoEditField.Value = 0;
+            end
+        end
+
+        function onMediumModelChanged(app)
+            state = QUSConfigurationLogic.prepare(app);
+            state.advanced.medium.config = MediumConfigurationLogic.forModel( ...
+                state.advanced.medium.config, app.ModeloDropDown.Value);
+            if strcmp(state.advanced.medium.config.kind, 'layers')
+                state.advanced.medium.config = MediumConfigurationLogic.setLayerCount( ...
+                    state.advanced.medium.config, ...
+                    numel(state.advanced.medium.config.layers), ...
+                    1e3 * app.DimensionesEditField.Value);
+            end
+            app.VelsonidoEditField.Value = state.advanced.medium.config.background.sound_speed;
+            app.DensidadEditField.Value = state.advanced.medium.config.background.density;
+            densityStdField = QUSConfigurationLogic.densityStdControl(app);
+            densityStdField.Value = state.advanced.medium.config.background.density_std;
+            QUSConfigurationLogic.storeState(app, state);
+        end
+
+        function onGridSizeChanged(app)
+            state = QUSConfigurationLogic.prepare(app);
+            try
+                [gridSizeX, gridSizeY] = QUSConfigurationLogic.parseGridSize( ...
+                    app.GridSizeEditField.Value);
+            catch exception
+                QUSConfigurationLogic.syncGridSizeDisplay(app, state.advanced.computation.grid_size_y);
+                QUSConfigurationLogic.showError(app, exception.message);
+                return
+            end
+
+            state.advanced.computation.grid_size_y = gridSizeY;
+            QUSConfigurationLogic.storeState(app, state);
+            QUSConfigurationLogic.updateCalculatedTime(app);
+        end
+
+        function syncGridSizeDisplay(app, gridSizeY)
+            if ~isprop(app, 'GridSizeEditField') || ~isvalid(app.GridSizeEditField)
+                return
+            end
+            if nargin < 2
+                state = QUSConfigurationLogic.prepare(app);
+                gridSizeY = state.advanced.computation.grid_size_y;
+            end
+            try
+                [gridSizeZ, ~] = QUSConfigurationLogic.currentGridSize(app);
+            catch
+                gridSizeZ = 5.6e-2;
+            end
+            app.GridSizeEditField.Value = QUSConfigurationLogic.formatGridSize(gridSizeZ, gridSizeY);
         end
 
         function openMediumSettings(app)
             state = QUSConfigurationLogic.prepare(app);
             settings = state.advanced.medium;
-            dialog = QUSConfigurationLogic.settingsDialog('Medio acústico: parámetros avanzados');
-            tabs = uitabgroup(dialog, 'Position', [15 55 490 285]);
+            if ~isfield(settings, 'config')
+                settings.config = MediumConfigurationLogic.defaultConfig();
+            end
+            settings.config = MediumConfigurationLogic.forModel(settings.config, app.ModeloDropDown.Value);
+            settings.config.background.sound_speed = app.VelsonidoEditField.Value;
+            settings.config.background.density = app.DensidadEditField.Value;
+            settings.config.background.density_std = QUSConfigurationLogic.densityStdControl(app).Value;
+            dialog = QUSConfigurationLogic.settingsDialog('Medio acústico: ACS y geometría');
+            dialog.Position = [330 80 650 720];
+            acsPreview = uiaxes(dialog, 'Position', [205 445 250 225]);
+            tabs = uitabgroup(dialog, 'Position', [15 55 620 365]);
 
-            homogeneousTab = uitab(tabs, 'Title', 'Medio homogéneo');
-            homogeneousGrid = uigridlayout(homogeneousTab, [2 2]);
-            homogeneousGrid.ColumnWidth = {'1x', '1x'};
-            homAlpha = QUSConfigurationLogic.numericField(homogeneousGrid, 1, ...
-                'Atenuación [dB/(MHz^y cm)]', settings.hom_alpha);
-            densityStd = QUSConfigurationLogic.numericField(homogeneousGrid, 2, ...
-                'Desviación estándar de densidad', settings.density_std);
+            isLayers = strcmp(settings.config.kind, 'layers');
+            isSingleInclusion = any(strcmp(settings.config.kind, ...
+                {'single_circle', 'single_shape'}));
+            alphaPower = []; alphaMode = [];
+            homAlpha = []; cReference = [];
+            if ~isLayers
+                absorptionTab = uitab(tabs, 'Title', 'Background ACS');
+                absorptionRows = 4;
+                if isSingleInclusion, absorptionRows = 2; end
+                absorptionGrid = uigridlayout(absorptionTab, [absorptionRows 2]);
+                absorptionGrid.ColumnWidth = {'1x', '1x'};
+                homAlpha = QUSConfigurationLogic.numericField(absorptionGrid, 1, ...
+                    'Background ACS [dB/cm/MHz]', settings.hom_alpha);
+                cReferenceRow = 4;
+                if isSingleInclusion, cReferenceRow = 2; end
+                if ~isSingleInclusion
+                    alphaPower = QUSConfigurationLogic.numericField(absorptionGrid, 2, ...
+                        'Alpha power (global)', settings.alpha_power);
+                    alphaMode = QUSConfigurationLogic.dropDownField(absorptionGrid, 3, ...
+                        'Modo de absorción (global)', {'no_dispersion', 'default'}, settings.alpha_mode);
+                end
+                cReference = QUSConfigurationLogic.numericField(absorptionGrid, cReferenceRow, ...
+                    'Referencia k-Wave [m/s] (fijada)', settings.sound_speed_ref);
+                % This is the reference speed of k-Wave's k-space operator, not
+                % an acoustic absorption property.  Keep the baseline value fixed
+                % in the GUI so it cannot be confused with the physical c map.
+                cReference.Editable = 'off';
+                cReference.Tooltip = ['Parámetro numérico del operador k-Wave. ' ...
+                    'El baseline usa 1540 m/s; no corresponde a ACS ni a c(x,z).'];
+            end
 
-            absorptionTab = uitab(tabs, 'Title', 'Absorción');
-            absorptionGrid = uigridlayout(absorptionTab, [3 2]);
-            absorptionGrid.ColumnWidth = {'1x', '1x'};
-            alphaPower = QUSConfigurationLogic.numericField(absorptionGrid, 1, ...
-                'Alpha power', settings.alpha_power);
-            alphaMode = QUSConfigurationLogic.dropDownField(absorptionGrid, 2, ...
-                'Modo de absorción', {'no_dispersion', 'default'}, settings.alpha_mode);
-            cReference = QUSConfigurationLogic.numericField(absorptionGrid, 3, ...
-                'Velocidad de referencia [m/s]', settings.sound_speed_ref);
+            inclusion = settings.config.inclusions(1);
+            inclusionAcs = [];
+            shape = []; size1 = []; size2 = []; centerX = []; centerZ = [];
+            inclusionTable = []; layersTable = []; layerCount = [];
+            selectedInclusionIndex = 1;
+            if strcmp(settings.config.kind, 'multiple')
+                inclusionTab = uitab(tabs, 'Title', 'Inclusiones');
+                data = cell(numel(settings.config.inclusions), 3);
+                for index = 1:numel(settings.config.inclusions)
+                    item = settings.config.inclusions(index);
+                    data(index, :) = {item.shape, item.center_mm(1) / 10, item.center_mm(2) / 10};
+                end
+                inclusionTable = uitable(inclusionTab, 'Data', data, ...
+                    'ColumnName', {'Forma','x cm','z cm'}, ...
+                    'ColumnFormat', {{'circle','ellipse','rectangle'}, 'numeric', 'numeric'}, ...
+                    'ColumnEditable', true(1, 3), 'Position', [8 42 600 255]);
+                addButton = uibutton(inclusionTab, 'Text', '+ Inclusión', 'Position', [8 8 115 26]);
+                removeButton = uibutton(inclusionTab, 'Text', '− Última', 'Position', [132 8 105 26]);
+                modifyButton = uibutton(inclusionTab, 'Text', 'Modificar propiedades', ...
+                    'Position', [247 8 165 26]);
+                addButton.ButtonPushedFcn = @(~, ~) addInclusionRow();
+                removeButton.ButtonPushedFcn = @(~, ~) removeInclusionRow();
+                modifyButton.ButtonPushedFcn = @(~, ~) modifySelectedInclusion();
+                inclusionTable.CellSelectionCallback = @(~, event) selectInclusion(event);
+            elseif strcmp(settings.config.kind, 'layers')
+                layersTab = uitab(tabs, 'Title', 'Capas');
+                depthMm = 1e3 * app.DimensionesEditField.Value;
+                settings.config = MediumConfigurationLogic.setLayerCount( ...
+                    settings.config, numel(settings.config.layers), depthMm);
+                uilabel(layersTab, 'Text', 'Número de capas:', ...
+                    'Position', [20 318 125 24]);
+                layerCount = uidropdown(layersTab, 'Items', {'1','2','3','4'}, ...
+                    'Value', num2str(numel(settings.config.layers)), ...
+                    'Position', [150 318 70 24]);
+                layerInfo = uilabel(layersTab, 'Text', '', ...
+                    'Position', [232 318 365 24]);
+                layersTable = uitable(layersTab, ...
+                    'ColumnName', {'ACS [dB/cm/MHz]'}, ...
+                    'ColumnFormat', {'numeric'}, ...
+                    'ColumnEditable', true, 'Position', [20 20 580 280]);
+                updateLayerTable();
+                layerCount.ValueChangedFcn = @(~, ~) updateLayerCount();
+                layersTable.CellEditCallback = @(~, ~) refreshAcsPreview();
+            elseif ~strcmp(settings.config.kind, 'homogeneous')
+                inclusionAcsTab = uitab(tabs, 'Title', 'Inclusión ACS');
+                inclusionAcsGrid = uigridlayout(inclusionAcsTab, [3 2]);
+                inclusionAcs = QUSConfigurationLogic.numericField(inclusionAcsGrid, 1, ...
+                    'Inclusión ACS [dB/cm/MHz]', inclusion.acoustic.acs);
+                alphaPower = QUSConfigurationLogic.numericField(inclusionAcsGrid, 2, ...
+                    'Alpha power (global)', settings.alpha_power);
+                alphaMode = QUSConfigurationLogic.dropDownField(inclusionAcsGrid, 3, ...
+                    'Modo de absorción (global)', {'no_dispersion', 'default'}, settings.alpha_mode);
+                geometryTab = uitab(tabs, 'Title', 'Geometría');
+                geometryRows = 5;
+                if strcmp(settings.config.kind, 'single_circle')
+                    geometryRows = 3;
+                end
+                geometryGrid = uigridlayout(geometryTab, [geometryRows 2]);
+                if strcmp(settings.config.kind, 'single_circle')
+                    size1 = QUSConfigurationLogic.numericField(geometryGrid, 1, ...
+                        'Radio [mm]', inclusion.geometry_mm(1));
+                    size2 = [];
+                    centerX = QUSConfigurationLogic.numericField(geometryGrid, 2, ...
+                        'x lateral [mm]', inclusion.center_mm(1));
+                else
+                    shape = QUSConfigurationLogic.dropDownField(geometryGrid, 1, 'Forma', ...
+                        {'ellipse','rectangle'}, inclusion.shape);
+                    size1 = QUSConfigurationLogic.numericField(geometryGrid, 2, ...
+                        'Dimensión lateral [mm]', inclusion.geometry_mm(1));
+                    size2 = QUSConfigurationLogic.numericField(geometryGrid, 3, ...
+                        'Dimensión axial [mm]', inclusion.geometry_mm(2));
+                    centerX = QUSConfigurationLogic.numericField(geometryGrid, 4, ...
+                        'x lateral [mm]', inclusion.center_mm(1));
+                end
+                centerZValue = inclusion.center_mm(2);
+                centerZLabel = 'z axial [mm]';
+                centerZIsAutomatic = ~isfinite(centerZValue);
+                if centerZIsAutomatic
+                    % NaN representa centro axial automático en la
+                    % configuración. uieditfield exige un escalar finito,
+                    % por eso el diálogo muestra la mitad de profundidad.
+                    centerZValue = 5e2 * app.DimensionesEditField.Value;
+                    centerZLabel = 'z axial [mm] (automático)';
+                end
+                centerZRow = geometryRows;
+                centerZ = QUSConfigurationLogic.numericField(geometryGrid, centerZRow, ...
+                    centerZLabel, centerZValue);
+                if centerZIsAutomatic
+                    centerZ.Enable = 'off';
+                end
+            end
 
             QUSConfigurationLogic.dialogButtons(dialog, @applySettings);
+            previewControls = {homAlpha, alphaPower, cReference, inclusionAcs, ...
+                size1, size2, centerX, centerZ};
+            for controlIndex = 1:numel(previewControls)
+                if ~isempty(previewControls{controlIndex})
+                    previewControls{controlIndex}.ValueChangedFcn = @(~, ~) refreshAcsPreview();
+                end
+            end
+            if ~isempty(alphaMode), alphaMode.ValueChangedFcn = @(~, ~) refreshAcsPreview(); end
+            if ~isempty(shape), shape.ValueChangedFcn = @(~, ~) refreshAcsPreview(); end
+            if ~isempty(inclusionTable), inclusionTable.CellEditCallback = @(~, ~) refreshAcsPreview(); end
+            refreshAcsPreview();
 
             function applySettings(~, ~)
-                if homAlpha.Value < 0 || densityStd.Value < 0 || ...
-                        alphaPower.Value <= 0 || cReference.Value <= 0
-                    uialert(dialog, 'Revisa los valores del medio acústico.', 'Valores inválidos');
-                    return
+                % Esta ventana solo captura la configuración. La validación
+                % física se hace de manera centralizada al pulsar Set, junto
+                % con geometría, emisor, cálculo y reproducibilidad.
+                config = settings.config;
+                backgroundAcs = settings.hom_alpha;
+                alphaPowerValue = settings.alpha_power;
+                alphaModeValue = settings.alpha_mode;
+                soundSpeedReference = settings.sound_speed_ref;
+                if ~isempty(homAlpha), backgroundAcs = homAlpha.Value; end
+                if ~isempty(alphaPower), alphaPowerValue = alphaPower.Value; end
+                if ~isempty(alphaMode), alphaModeValue = alphaMode.Value; end
+                if ~isempty(cReference), soundSpeedReference = cReference.Value; end
+                config.background = struct('sound_speed', app.VelsonidoEditField.Value, ...
+                    'density', app.DensidadEditField.Value, 'acs', backgroundAcs, ...
+                    'density_std', QUSConfigurationLogic.densityStdControl(app).Value);
+                config.alpha_power = alphaPowerValue; config.alpha_mode = alphaModeValue; config.sound_speed_ref = soundSpeedReference;
+                if ~isempty(inclusionTable)
+                    config.inclusions = readInclusions(inclusionTable.Data);
+                elseif ~isempty(layersTable)
+                    config.layers = readLayers(layersTable.Data);
+                    config = MediumConfigurationLogic.setLayerCount(config, ...
+                        str2double(layerCount.Value), 1e3 * app.DimensionesEditField.Value);
+                elseif ~isempty(inclusionAcs)
+                    if strcmp(settings.config.kind, 'single_circle')
+                        config.inclusions(1).shape = 'circle';
+                        config.inclusions(1).geometry_mm = [size1.Value, 0];
+                    else
+                        config.inclusions(1).shape = shape.Value;
+                        config.inclusions(1).geometry_mm = [size1.Value, size2.Value];
+                    end
+                    centerZValue = centerZ.Value;
+                    if centerZIsAutomatic
+                        centerZValue = NaN;
+                    end
+                    config.inclusions(1).center_mm = [centerX.Value, centerZValue];
+                    config.inclusions(1).acoustic = regionWithGlobalProperties(inclusionAcs.Value);
                 end
                 state.advanced.medium = struct( ...
-                    'hom_alpha', homAlpha.Value, ...
-                    'density_std', densityStd.Value, ...
-                    'alpha_power', alphaPower.Value, ...
-                    'alpha_mode', alphaMode.Value, ...
-                    'sound_speed_ref', cReference.Value);
+                    'hom_alpha', backgroundAcs, ...
+                    'density_std', QUSConfigurationLogic.densityStdControl(app).Value, ...
+                    'alpha_power', alphaPowerValue, ...
+                    'alpha_mode', alphaModeValue, ...
+                    'sound_speed_ref', soundSpeedReference, 'config', config);
                 QUSConfigurationLogic.storeState(app, state);
-                QUSConfigurationLogic.refreshPreviewIfAvailable(app);
                 delete(dialog);
+            end
+
+            function addInclusionRow()
+                data = inclusionTable.Data;
+                prototype = data(end, :);
+                prototype{2} = prototype{2} + 1;
+                inclusionTable.Data(end + 1, :) = prototype;
+                refreshAcsPreview();
+            end
+
+            function selectInclusion(event)
+                if ~isempty(event.Indices)
+                    selectedInclusionIndex = event.Indices(1);
+                end
+            end
+
+            function removeInclusionRow()
+                if size(inclusionTable.Data, 1) > 1
+                    inclusionTable.Data(end, :) = [];
+                    refreshAcsPreview();
+                end
+            end
+
+            function modifySelectedInclusion()
+                items = readInclusions(inclusionTable.Data);
+                index = min(max(1, selectedInclusionIndex), numel(items));
+                item = items(index);
+                propertyDialog = uifigure('Name', sprintf('Inclusión %d: propiedades', index), ...
+                    'Position', [470 300 390 250], 'WindowStyle', 'modal', 'Resize', 'off');
+                grid = uigridlayout(propertyDialog, [3 2]);
+                grid.Padding = [15 48 15 15];
+                acsField = QUSConfigurationLogic.numericField(grid, 1, 'ACS [dB/cm/MHz]', item.acoustic.acs);
+                alphaPowerField = QUSConfigurationLogic.numericField(grid, 2, ...
+                    'Alpha power (global)', settings.config.alpha_power);
+                alphaModeField = QUSConfigurationLogic.dropDownField(grid, 3, ...
+                    'Modo de absorción (global)', {'no_dispersion', 'default'}, settings.config.alpha_mode);
+                uibutton(propertyDialog, 'Text', 'Aplicar', 'Position', [185 12 88 26], ...
+                    'ButtonPushedFcn', @(~, ~) applyInclusionProperties());
+                uibutton(propertyDialog, 'Text', 'Cancelar', 'Position', [282 12 88 26], ...
+                    'ButtonPushedFcn', @(~, ~) delete(propertyDialog));
+                function applyInclusionProperties()
+                    items(index).acoustic.acs = acsField.Value;
+                    settings.config.alpha_power = alphaPowerField.Value;
+                    settings.config.alpha_mode = alphaModeField.Value;
+                    settings.config.inclusions = items;
+                    delete(propertyDialog);
+                    refreshAcsPreview();
+                end
+            end
+
+            function refreshAcsPreview()
+                try
+                    config = settings.config;
+                    backgroundAcs = settings.hom_alpha;
+                    alphaPowerValue = settings.alpha_power;
+                    alphaModeValue = settings.alpha_mode;
+                    soundSpeedReference = settings.sound_speed_ref;
+                    if ~isempty(homAlpha), backgroundAcs = homAlpha.Value; end
+                    if ~isempty(alphaPower), alphaPowerValue = alphaPower.Value; end
+                    if ~isempty(alphaMode), alphaModeValue = alphaMode.Value; end
+                    if ~isempty(cReference), soundSpeedReference = cReference.Value; end
+                    config.background = struct('sound_speed', app.VelsonidoEditField.Value, ...
+                        'density', app.DensidadEditField.Value, 'acs', backgroundAcs, ...
+                        'density_std', QUSConfigurationLogic.densityStdControl(app).Value);
+                    config.alpha_power = alphaPowerValue;
+                    config.alpha_mode = alphaModeValue;
+                    config.sound_speed_ref = soundSpeedReference;
+                    if ~isempty(inclusionTable)
+                        config.inclusions = readInclusions(inclusionTable.Data);
+                    elseif ~isempty(inclusionAcs)
+                        if strcmp(config.kind, 'single_circle')
+                            config.inclusions(1).shape = 'circle';
+                            config.inclusions(1).geometry_mm = [size1.Value, 0];
+                        else
+                            config.inclusions(1).shape = shape.Value;
+                            config.inclusions(1).geometry_mm = [size1.Value, size2.Value];
+                        end
+                        config.inclusions(1).center_mm = [centerX.Value, centerZ.Value];
+                        config.inclusions(1).acoustic = regionWithGlobalProperties(inclusionAcs.Value);
+                    elseif ~isempty(layersTable)
+                        config.layers = readLayers(layersTable.Data);
+                    end
+                    axial = linspace(0, 1e3 * app.DimensionesEditField.Value, 180);
+                    lateral = linspace(-5e2 * state.advanced.computation.grid_size_y, ...
+                        5e2 * state.advanced.computation.grid_size_y, 150);
+                    [~, ~, acs] = MediumConfigurationLogic.maps(config, axial, lateral, ...
+                        state.advanced.reproducibility.rng_seed);
+                    cla(acsPreview);
+                    imagesc(acsPreview, lateral / 10, axial / 10, acs, [0.35 1.05]);
+                    set(acsPreview, 'YDir', 'reverse'); axis(acsPreview, 'image');
+                    colormap(acsPreview, turbo(256));
+                    acsColorbar = colorbar(acsPreview);
+                    acsColorbar.Label.String = 'ACS [dB/cm/MHz]';
+                    acsColorbar.Ticks = 0.4:0.1:1.0;
+                    acsColorbar.TickLabels = {'0.4', '', '0.6', '', '0.8', '', '1'};
+                    title(acsPreview, 'ACS');
+                    xlabel(acsPreview, 'x lateral [cm]'); ylabel(acsPreview, 'z [cm]');
+                catch
+                    cla(acsPreview); grid(acsPreview, 'on');
+                    title(acsPreview, 'ACS');
+                end
+            end
+
+            function updateLayerCount()
+                settings.config.layers = readLayers(layersTable.Data);
+                settings.config = MediumConfigurationLogic.setLayerCount(settings.config, ...
+                    str2double(layerCount.Value), 1e3 * app.DimensionesEditField.Value);
+                updateLayerTable();
+                refreshAcsPreview();
+            end
+
+            function updateLayerTable()
+                layerNumber = numel(settings.config.layers);
+                data = cell(layerNumber, 1);
+                for layerIndex = 1:layerNumber
+                    item = settings.config.layers(layerIndex);
+                    data(layerIndex, :) = {item.acoustic.acs};
+                end
+                layersTable.Data = data;
+                layersTable.RowName = arrayfun(@(layerIndex) ...
+                    sprintf('Capa %d', layerIndex), 1:layerNumber, 'UniformOutput', false);
+                layerInfo.Text = sprintf('Espesor automático: %.3g mm (1/%d de la profundidad).', ...
+                    1e3 * app.DimensionesEditField.Value / layerNumber, layerNumber);
+            end
+
+            function inclusions = readInclusions(data)
+                inclusions = repmat(settings.config.inclusions(1), 1, size(data, 1));
+                for index = 1:size(data, 1)
+                    sourceIndex = min(index, numel(settings.config.inclusions));
+                    inclusions(index) = settings.config.inclusions(sourceIndex);
+                    inclusions(index).shape = char(string(data{index, 1}));
+                    inclusions(index).center_mm = 10 * [data{index, 2}, data{index, 3}];
+                    inclusions(index).acoustic = regionWithGlobalProperties( ...
+                        settings.config.inclusions(sourceIndex).acoustic.acs);
+                end
+            end
+
+            function layers = readLayers(data)
+                layers = repmat(struct('thickness_mm', 0, ...
+                    'acoustic', settings.config.background), 1, size(data, 1));
+                thicknessMm = 1e3 * app.DimensionesEditField.Value / size(data, 1);
+                for index = 1:size(data, 1)
+                    layers(index).thickness_mm = thicknessMm;
+                    layers(index).acoustic = regionWithGlobalProperties(data{index, 1});
+                end
+            end
+
+            function region = regionWithGlobalProperties(acs)
+                region = struct('sound_speed', app.VelsonidoEditField.Value, ...
+                    'density', app.DensidadEditField.Value, 'acs', acs, ...
+                    'density_std', QUSConfigurationLogic.densityStdControl(app).Value);
             end
         end
 
         function openTransducerSettings(app)
             state = QUSConfigurationLogic.prepare(app);
             settings = state.advanced.transducer;
+            defaults = QUSConfigurationLogic.defaultAdvancedSettings();
+            if ~isfield(settings, 'receive_directivity_size_factor')
+                settings.receive_directivity_size_factor = ...
+                    defaults.transducer.receive_directivity_size_factor;
+            end
+            if ~isfield(settings, 'receive_directivity_angle')
+                settings.receive_directivity_angle = ...
+                    defaults.transducer.receive_directivity_angle;
+            end
             dialog = QUSConfigurationLogic.settingsDialog('Transductor: parámetros avanzados');
             tabs = uitabgroup(dialog, 'Position', [15 55 490 285]);
 
             arrayTab = uitab(tabs, 'Title', 'Arreglo');
-            arrayGrid = uigridlayout(arrayTab, [4 2]);
+            arrayGrid = uigridlayout(arrayTab, [3 2]);
             arrayGrid.ColumnWidth = {'1x', '1x'};
-            focus = QUSConfigurationLogic.numericField(arrayGrid, 1, 'Foco [m]', settings.source_focus);
-            pitch = QUSConfigurationLogic.numericField(arrayGrid, 2, 'Pitch [m]', settings.element_pitch);
-            width = QUSConfigurationLogic.numericField(arrayGrid, 3, 'Ancho del elemento [m]', settings.element_width);
-            rotation = QUSConfigurationLogic.numericField(arrayGrid, 4, 'Rotación [rad]', settings.rotation);
+            focus = QUSConfigurationLogic.numericField(arrayGrid, 1, 'Focal depth [cm]', 1e2 * settings.source_focus);
+            pitch = QUSConfigurationLogic.numericField(arrayGrid, 2, 'Pitch [mm]', 1e3 * settings.element_pitch);
+            width = QUSConfigurationLogic.numericField(arrayGrid, 3, 'Element width [m]', settings.element_width);
 
             scanTab = uitab(tabs, 'Title', 'Apertura y escaneo');
-            scanGrid = uigridlayout(scanTab, [6 2]);
+            scanGrid = uigridlayout(scanTab, [7 2]);
             scanGrid.ColumnWidth = {'1x', '1x'};
-            fNumberTx = QUSConfigurationLogic.numericField(scanGrid, 1, 'F-number Tx', settings.focal_number_tx);
-            fNumberRx = QUSConfigurationLogic.numericField(scanGrid, 2, 'F-number Rx', settings.focal_number_rx);
-            nLines = QUSConfigurationLogic.numericField(scanGrid, 3, 'Número de líneas', settings.n_lines);
-            baseX = QUSConfigurationLogic.numericField(scanGrid, 4, 'Traslación axial [m]', settings.base_translation_x);
-            baseY = QUSConfigurationLogic.numericField(scanGrid, 5, 'Traslación lateral [m]', settings.base_translation_y);
-            note = uilabel(scanGrid, 'Text', 'Los elementos y retardos se derivan de estos parámetros.');
-            note.Layout.Row = 6;
+            fNumberTx = QUSConfigurationLogic.numericField(scanGrid, 1, 'Focal number Tx', settings.focal_number_tx);
+            activeTxElements = uilabel(scanGrid, 'Text', 'Active Tx elements');
+            activeTxElements.Layout.Row = 2;
+            activeTxElements.Layout.Column = 1;
+            activeTxElementsValue = uilabel(scanGrid, 'HorizontalAlignment', 'right');
+            activeTxElementsValue.Layout.Row = 2;
+            activeTxElementsValue.Layout.Column = 2;
+            fNumberRx = QUSConfigurationLogic.numericField(scanGrid, 3, 'Focal number Rx', settings.focal_number_rx);
+            receiveElements = uilabel(scanGrid, 'Text', 'Receive elements');
+            receiveElements.Layout.Row = 4;
+            receiveElements.Layout.Column = 1;
+            receiveElementsValue = uilabel(scanGrid, 'HorizontalAlignment', 'right');
+            receiveElementsValue.Layout.Row = 4;
+            receiveElementsValue.Layout.Column = 2;
+            totalElements = uilabel(scanGrid, 'Text', 'Number of elements');
+            totalElements.Layout.Row = 5;
+            totalElements.Layout.Column = 1;
+            totalElementsValue = uilabel(scanGrid, 'HorizontalAlignment', 'right');
+            totalElementsValue.Layout.Row = 5;
+            totalElementsValue.Layout.Column = 2;
+            nLines = QUSConfigurationLogic.numericField(scanGrid, 6, 'Number of beams', settings.n_lines);
+            note = uilabel(scanGrid, 'Text', 'Each beam is one lateral acquisition. In the current pipeline, Number of elements equals Receive elements.');
+            note.WordWrap = 'on';
+            note.Layout.Row = 7;
             note.Layout.Column = [1 2];
+
+            positionTab = uitab(tabs, 'Title', 'Posición');
+            positionGrid = uigridlayout(positionTab, [2 2]);
+            positionGrid.ColumnWidth = {'1x', '1x'};
+            baseX = QUSConfigurationLogic.numericField(positionGrid, 1, 'Axial translation [m]', settings.base_translation_x);
+            baseY = QUSConfigurationLogic.numericField(positionGrid, 2, 'Lateral translation [m]', settings.base_translation_y);
+
+            updateDerivedElements();
+            focus.ValueChangedFcn = @(~, ~) updateDerivedElements();
+            pitch.ValueChangedFcn = @(~, ~) updateDerivedElements();
+            fNumberTx.ValueChangedFcn = @(~, ~) updateDerivedElements();
+            fNumberRx.ValueChangedFcn = @(~, ~) updateDerivedElements();
+
+            receiveTab = uitab(tabs, 'Title', 'Recepción');
+            receiveGrid = uigridlayout(receiveTab, [3 2]);
+            receiveGrid.ColumnWidth = {'1x', '1x'};
+            directivityFactor = QUSConfigurationLogic.numericField(receiveGrid, 1, ...
+                'Factor de directividad × dx', settings.receive_directivity_size_factor);
+            directivityAngle = QUSConfigurationLogic.numericField(receiveGrid, 2, ...
+                'Ángulo de directividad [rad]', settings.receive_directivity_angle);
+            receiveNote = uilabel(receiveGrid, 'Text', ...
+                'El mismo kWaveArray recibe las señales del pulso-eco.');
+            receiveNote.WordWrap = 'on';
+            receiveNote.Layout.Row = 3;
+            receiveNote.Layout.Column = [1 2];
 
             QUSConfigurationLogic.dialogButtons(dialog, @applySettings);
 
+            function updateDerivedElements()
+                if all(isfinite([focus.Value, pitch.Value, fNumberTx.Value, fNumberRx.Value])) && ...
+                        focus.Value > 0 && pitch.Value > 0 && ...
+                        fNumberTx.Value > 0 && fNumberRx.Value > 0
+                    focalDepthMeters = 1e-2 * focus.Value;
+                    pitchMeters = 1e-3 * pitch.Value;
+                    activeTxElementsValue.Text = string(floor( ...
+                        (focalDepthMeters / fNumberTx.Value) / pitchMeters));
+                    receiveElementsValue.Text = string(floor( ...
+                        (focalDepthMeters / fNumberRx.Value) / pitchMeters));
+                    totalElementsValue.Text = receiveElementsValue.Text;
+                else
+                    activeTxElementsValue.Text = '—';
+                    receiveElementsValue.Text = '—';
+                    totalElementsValue.Text = '—';
+                end
+            end
+
             function applySettings(~, ~)
                 values = [focus.Value, pitch.Value, width.Value, fNumberTx.Value, ...
-                    fNumberRx.Value, nLines.Value];
-                if any(~isfinite(values)) || any(values <= 0)
-                    uialert(dialog, 'Foco, pitch, ancho, F-numbers y líneas deben ser positivos.', ...
+                    fNumberRx.Value, nLines.Value, directivityFactor.Value];
+                positionValues = [baseX.Value, baseY.Value, directivityAngle.Value];
+                if any(~isfinite(values)) || any(values <= 0) || any(~isfinite(positionValues))
+                    uialert(dialog, 'Focal depth [cm], pitch [mm], element width, focal numbers y number of beams deben ser positivos. Las posiciones pueden ser cero.', ...
                         'Valores inválidos');
                     return
                 end
+                if nLines.Value ~= round(nLines.Value)
+                    uialert(dialog, 'Number of beams debe ser un entero positivo.', ...
+                        'Valor inválido');
+                    return
+                end
+                focalDepthMeters = 1e-2 * focus.Value;
+                pitchMeters = 1e-3 * pitch.Value;
+                activeTxCount = floor((focalDepthMeters / fNumberTx.Value) / pitchMeters);
+                receiveCount = floor((focalDepthMeters / fNumberRx.Value) / pitchMeters);
+                if activeTxCount < 1 || receiveCount < 1
+                    uialert(dialog, 'La apertura configurada debe generar al menos un elemento Tx y un elemento Rx.', ...
+                        'Configuración no compatible');
+                    return
+                end
+                if activeTxCount > receiveCount
+                    uialert(dialog, 'Active Tx elements no puede exceder Receive elements en la implementación actual.', ...
+                        'Configuración no compatible');
+                    return
+                end
                 state.advanced.transducer = struct( ...
-                    'source_focus', focus.Value, ...
-                    'element_pitch', pitch.Value, ...
+                    'source_focus', focalDepthMeters, ...
+                    'element_pitch', pitchMeters, ...
                     'element_width', width.Value, ...
                     'focal_number_tx', fNumberTx.Value, ...
                     'focal_number_rx', fNumberRx.Value, ...
                     'n_lines', round(nLines.Value), ...
                     'base_translation_x', baseX.Value, ...
                     'base_translation_y', baseY.Value, ...
-                    'rotation', rotation.Value);
+                    'rotation', 0, ...
+                    'receive_directivity_size_factor', directivityFactor.Value, ...
+                    'receive_directivity_angle', directivityAngle.Value);
                 QUSConfigurationLogic.storeState(app, state);
                 QUSConfigurationLogic.refreshPreviewIfAvailable(app);
                 delete(dialog);
@@ -253,79 +789,9 @@ classdef QUSConfigurationLogic
         end
 
         function openSensorSettings(app)
-            state = QUSConfigurationLogic.prepare(app);
-            settings = QUSConfigurationLogic.normalizeSensorSettings(state.advanced.sensor);
-            sensorType = char(string(app.TipoDropDown_2.Value));
-            dialog = QUSConfigurationLogic.settingsDialog(['Sensor: ', sensorType]);
-            tabs = uitabgroup(dialog, 'Position', [15 55 490 285]);
-
-            variablesTab = uitab(tabs, 'Title', 'Variables a guardar');
-            variablesGrid = uigridlayout(variablesTab, [5 2]);
-            variablesGrid.ColumnWidth = {'1x', '1x'};
-            pressure = QUSConfigurationLogic.checkBoxField(variablesGrid, 1, ...
-                'Presión instantánea (p)', settings.record_pressure);
-            rmsPressure = QUSConfigurationLogic.checkBoxField(variablesGrid, 2, ...
-                'Presión RMS (p_rms)', settings.record_rms);
-            peakPressure = QUSConfigurationLogic.checkBoxField(variablesGrid, 3, ...
-                'Presión máxima (p_max)', settings.record_peak);
-            variableNote = uilabel(variablesGrid, 'Text', ...
-                'Selecciona al menos una variable. El resumen se mostrará en el panel Sensor.');
-            variableNote.WordWrap = 'on';
-            variableNote.Layout.Row = [4 5];
-            variableNote.Layout.Column = [1 2];
-
-            if strcmp(sensorType, 'Transductor emisor')
-                receiveTab = uitab(tabs, 'Title', 'Recepción');
-                receiveGrid = uigridlayout(receiveTab, [4 2]);
-                receiveGrid.ColumnWidth = {'1x', '1x'};
-                sharedArray = QUSConfigurationLogic.checkBoxField(receiveGrid, 1, ...
-                    'Usar el mismo kWaveArray para recibir', settings.shared_array);
-                directivityFactor = QUSConfigurationLogic.numericField(receiveGrid, 2, ...
-                    'Factor de directividad × dx', settings.directivity_size_factor);
-                directivityAngle = QUSConfigurationLogic.numericField(receiveGrid, 3, ...
-                    'Ángulo de directividad [rad]', settings.directivity_angle);
-                note = uilabel(receiveGrid, 'Text', ...
-                    'El sensor usa la geometría del transductor emisor.');
-                note.Layout.Row = 4;
-                note.Layout.Column = [1 2];
-            else
-                configurationTab = uitab(tabs, 'Title', sensorType);
-                configurationGrid = uigridlayout(configurationTab, [2 1]);
-                configurationGrid.RowHeight = {'fit', '1x'};
-                message = uilabel(configurationGrid, 'Text', ...
-                    'El plano y su posición se definen en el panel principal de Sensor.');
-                message.WordWrap = 'on';
-                message.Layout.Row = 1;
-            end
-            QUSConfigurationLogic.dialogButtons(dialog, @applySettings);
-
-            function applySettings(~, ~)
-                if ~pressure.Value && ~rmsPressure.Value && ~peakPressure.Value
-                    uialert(dialog, 'Selecciona al menos una variable para guardar.', ...
-                        'Variables requeridas');
-                    return
-                end
-                settings.record_pressure = pressure.Value;
-                settings.record_rms = rmsPressure.Value;
-                settings.record_peak = peakPressure.Value;
-
-                if strcmp(sensorType, 'Transductor emisor')
-                    if directivityFactor.Value <= 0 || ~isfinite(directivityAngle.Value)
-                        uialert(dialog, 'El factor y el ángulo de directividad no son válidos.', ...
-                            'Valores inválidos');
-                        return
-                    end
-                    settings.shared_array = sharedArray.Value;
-                    settings.directivity_size_factor = directivityFactor.Value;
-                    settings.directivity_angle = directivityAngle.Value;
-                end
-
-                state.advanced.sensor = settings;
-                QUSConfigurationLogic.setSensorVariablesSummary(app, settings);
-                QUSConfigurationLogic.storeState(app, state);
-                QUSConfigurationLogic.refreshPreviewIfAvailable(app);
-                delete(dialog);
-            end
+            uialert(app.UIFigure, ...
+                'La recepción usa el mismo kWaveArray que el transductor emisor. Configure su directividad en “Configurar Transductor”.', ...
+                'Recepción integrada al transductor');
         end
 
         function openPipelineSettings(app)
@@ -385,8 +851,8 @@ classdef QUSConfigurationLogic
                     'save_medium_previews', saveMedium.Value, ...
                     'save_rf_prebeamformed', saveRf.Value);
                 QUSConfigurationLogic.configureRealizationControls(app, state.advanced.reproducibility);
+                QUSConfigurationLogic.configurePipelineSummaryControls(app, state.advanced);
                 QUSConfigurationLogic.storeState(app, state);
-                QUSConfigurationLogic.refreshPreviewIfAvailable(app);
                 delete(dialog);
             end
         end
@@ -396,6 +862,7 @@ classdef QUSConfigurationLogic
         
         % Se llama antes de acciones importantes como Set, Save, Open o Reset.
         function state = prepare(app)
+            QUSConfigurationLogic.configureInitialBaselineLayout(app);
             if isprop(app, 'GridLayout15') && isvalid(app.GridLayout15)
                 app.GridLayout15.Visible = 'off';
             end
@@ -406,6 +873,7 @@ classdef QUSConfigurationLogic
             %Genera el estado inicial
             if isappdata(app.UIFigure, 'QUSConfigurationState')
                 state = getappdata(app.UIFigure, 'QUSConfigurationState');
+                QUSConfigurationLogic.configureDeleteButton(app, state);
                 return
             end
             
@@ -413,10 +881,19 @@ classdef QUSConfigurationLogic
                 'referenceDefined', false, ...
                 'reference', struct(), ...
                 'queue', QUSConfigurationLogic.emptyQueue(), ...
+                'pipelinePath', '', ...
+                'pipelineCases', struct([]), ...
+                'previewCases', struct([]), ...
+                'selectedPipelineCase', [], ...
                 'advanced', QUSConfigurationLogic.defaultAdvancedSettings());
 
             QUSConfigurationLogic.applyDefaults(app);
+            if isprop(app, 'DropDown')
+                QUSConfigurationLogic.configureGroupSelector(app, 1, 1);
+                app.DropDown.Enable = 'off';
+            end
             QUSConfigurationLogic.storeState(app, state);
+            QUSConfigurationLogic.configureDeleteButton(app, state);
             QUSConfigurationLogic.updateExecution(app, state);
         end
         
@@ -424,18 +901,83 @@ classdef QUSConfigurationLogic
         function storeState(app, state)
             setappdata(app.UIFigure, 'QUSConfigurationState', state);
         end
+
+        function state = stateIfAvailable(app)
+            state = [];
+            if isappdata(app.UIFigure, 'QUSConfigurationState')
+                state = getappdata(app.UIFigure, 'QUSConfigurationState');
+            end
+        end
+
+        function configurePipelineSummaryControls(app, advanced)
+            app.SensorPanel.Title = 'Cálculo y reproducibilidad';
+            app.TipoDropDown_2Label.Text = 'DataCast:';
+            app.TipoDropDown_2.Items = {'gpuArray-single', 'single'};
+            QUSConfigurationLogic.setDropDown(app.TipoDropDown_2, ...
+                advanced.computation.data_cast);
+            app.TipoDropDown_2.Enable = 'off';
+
+            app.PlanoDropDownLabel.Text = 'PlotSim:';
+            app.PlanoDropDown.Items = {'false', 'true'};
+            QUSConfigurationLogic.setDropDown(app.PlanoDropDown, ...
+                char(string(logical(advanced.computation.plot_sim_flag))));
+            app.PlanoDropDown.Enable = 'off';
+
+            app.PosicindelplanoDropDownLabel.Text = 'Semilla global:';
+            app.PosicindelplanoDropDown.Items = {num2str(advanced.reproducibility.rng_seed)};
+            app.PosicindelplanoDropDown.Value = app.PosicindelplanoDropDown.Items{1};
+            app.PosicindelplanoDropDown.Enable = 'off';
+
+            app.VariablesDropDownLabel.Text = 'Semilla base:';
+            app.VariablesDropDown.Items = {num2str(advanced.reproducibility.ref_seed_base)};
+            app.VariablesDropDown.Value = app.VariablesDropDown.Items{1};
+            app.VariablesDropDown.Enable = 'off';
+
+            app.ConfigurarPosicindelsensorButton.Text = 'Configurar Pipeline';
+            app.ConfigurarPosicindelsensorButton.ButtonPushedFcn = @(~, ~) ...
+                QUSConfigurationLogic.openPipelineSettings(app);
+        end
+
+        function field = densityStdControl(app)
+            if isprop(app, 'DensidadStdEditField') && isvalid(app.DensidadStdEditField)
+                field = app.DensidadStdEditField;
+                return
+            end
+            field = findobj(app.GridLayout8, 'Tag', 'DensityStdEditField');
+            if ~isempty(field)
+                field = field(1);
+                return
+            end
+            app.GridLayout8.RowHeight = {'1x', '1x', '1x', '1x', '1.3x'};
+            app.ConfigurarMedioAcusticoButton.Layout.Row = 5;
+            label = uilabel(app.GridLayout8, 'Text', 'Desv. densidad:');
+            label.FontSize = 10;
+            label.Layout.Row = 4;
+            label.Layout.Column = 1;
+            unit = uilabel(app.GridLayout8, 'Text', '[-]');
+            unit.FontSize = 10;
+            unit.Layout.Row = 4;
+            unit.Layout.Column = 3;
+            field = uieditfield(app.GridLayout8, 'numeric', 'Value', 0.04, ...
+                'Tag', 'DensityStdEditField');
+            field.Layout.Row = 4;
+            field.Layout.Column = 2;
+        end
         
         %Default settings para caso de cambio en atenuacion
         function settings = defaultAdvancedSettings()
-            settings.medium = struct('hom_alpha', 0.50, 'density_std', 0.04, ...
-                'alpha_power', 1, 'alpha_mode', 'no_dispersion', 'sound_speed_ref', 1595);
+            mediumConfig = MediumConfigurationLogic.defaultConfig();
+            settings.medium = struct('hom_alpha', mediumConfig.background.acs, ...
+                'density_std', mediumConfig.background.density_std, ...
+                'alpha_power', mediumConfig.alpha_power, ...
+                'alpha_mode', mediumConfig.alpha_mode, ...
+                'sound_speed_ref', mediumConfig.sound_speed_ref, ...
+                'config', mediumConfig);
             settings.transducer = struct('source_focus', 4e-2, 'element_pitch', 0.3e-3, ...
                 'element_width', 0.25e-3, 'focal_number_tx', 4, 'focal_number_rx', 2, ...
                 'n_lines', 128, 'base_translation_x', -2.7e-2, ...
-                'base_translation_y', 0, 'rotation', 0);
-            settings.sensor = struct('shared_array', true, 'directivity_size_factor', 10, ...
-                'directivity_angle', 0, 'record_pressure', true, ...
-                'record_rms', true, 'record_peak', true);
+                'base_translation_y', 0, 'rotation', 0, ...
+                'receive_directivity_size_factor', 10, 'receive_directivity_angle', 0);
             settings.computation = struct('grid_size_y', 4e-2, 'pml_size_y', 41, ...
                 'data_cast', 'gpuArray-single', 'plot_sim_flag', false);
             settings.reproducibility = struct('rng_seed', 23, 'ref_seed_base', 50000, ...
@@ -444,52 +986,93 @@ classdef QUSConfigurationLogic
                 'save_rf_prebeamformed', true);
         end
 
-        % Esta función completa una configuración de sensor que podría estar incompleta, esta enlazada
-        % a SensorPanelLogic, pero mas global.
-        function settings = normalizeSensorSettings(settings)
-            defaults = QUSConfigurationLogic.defaultAdvancedSettings();
-            defaultSensor = defaults.sensor;
-            fields = fieldnames(defaultSensor);
-            for index = 1:numel(fields)
-                fieldName = fields{index};
-                if ~isfield(settings, fieldName)
-                    settings.(fieldName) = defaultSensor.(fieldName);
-                end
-            end
-        end
-        
-        % Setea los nuevos valores de las variables, aun no usado.
-        function setSensorVariablesSummary(app, settings)
-            variables = {};
-            if settings.record_pressure
-                variables{end + 1} = 'p';
-            end
-            if settings.record_rms
-                variables{end + 1} = 'p_rms';
-            end
-            if settings.record_peak
-                variables{end + 1} = 'p_max';
-            end
+        % Ajusta la app existente al alcance de la primera etapa sin
+        % modificar el archivo binario .mlapp. El pipeline de referencia
+        % recibe con el mismo kWaveArray que emite; por ello no expone un
+        % sensor independiente. La profundidad define el tiempo de cálculo
+        % y pertenece a geometría y malla.
+        function configureInitialBaselineLayout(app)
+            app.UIAxes4.Visible = 'off';
+            QUSConfigurationLogic.densityStdControl(app);
+            app.GridSizeEditFieldLabel.Text = 'Malla (z, x):';
+            app.GridSizeEditField.ValueChangedFcn = @(~, ~) ...
+                QUSConfigurationLogic.onGridSizeChanged(app);
+            app.DropDown.ValueChangedFcn = @(~, ~) ...
+                QUSConfigurationLogic.onGroupSelected(app);
+            app.PruebaButton.Text = 'Delete';
+            app.PruebaButton.ButtonPushedFcn = @(~, ~) ...
+                QUSConfigurationLogic.onDeleteSelectedCase(app);
+            app.ModeloDropDown.Items = {'Homogeneo', 'Inclusión circular', ...
+                'Inclusión irregular', ...
+                'Medio por capas', 'Múltiples inclusiones'};
+            app.ModeloDropDown.ValueChangedFcn = @(~, ~) ...
+                QUSConfigurationLogic.onMediumModelChanged(app);
 
-            summary = strjoin(variables, ', ');
-            app.VariablesDropDown.Items = {summary};
-            app.VariablesDropDown.Value = summary;
+            app.DimensionesEditFieldLabel.Visible = 'on';
+            app.DimensionesEditField.Visible = 'on';
+            app.mLabel_3.Visible = 'on';
+            app.DimensionesEditFieldLabel.Text = 'Profundidad:';
+            app.mLabel_3.Text = '[m]';
+
+            app.DescripcinLabel.Parent = app.GridLayout4;
+            app.DescripcinLabel.Layout.Row = 2;
+            app.DescripcinLabel.Layout.Column = 1;
+            app.DescripcinLabel.Text = 'Tiempo calculado:';
+            app.TiempoEditField.Parent = app.GridLayout4;
+            app.TiempoEditField.Layout.Row = 2;
+            app.TiempoEditField.Layout.Column = 2;
+            app.TiempoEditField.Editable = 'off';
+            app.DescripcinLabel_2.Parent = app.GridLayout4;
+            app.DescripcinLabel_2.Layout.Row = 2;
+            app.DescripcinLabel_2.Layout.Column = 3;
+            app.DescripcinLabel_2.Text = '[µs]';
+
+            app.SensorPanel.Visible = 'on';
+            app.SensorPanel.Title = 'Cálculo y reproducibilidad';
+            app.ExperimentoPanel.Layout.Row = 4;
+            app.SensorPanel.Layout.Row = 5;
+            app.GridLayout2.RowHeight = {'1.1x', '1.1x', '1.6x', '0.85x', '1.1x', '0.3x'};
+
+            % Hasta la etapa 3 el generador solo implementa esta geometría,
+            % señal y focalización del baseline; conservar otros menús
+            % habilitados sugeriría opciones que todavía no llegan a k-Wave.
+            QUSConfigurationLogic.setDropDown(app.TipoDropDown, 'Lineal Plano');
+            QUSConfigurationLogic.setDropDown(app.SealDropDown, 'Tone Burst');
+            QUSConfigurationLogic.setDropDown(app.MododehazDropDown, 'Focused');
+            app.TipoDropDown.Enable = 'off';
+            app.SealDropDown.Enable = 'off';
+            app.MododehazDropDown.Enable = 'off';
+
+            app.SolverDropDownLabel.Layout.Row = 4;
+            app.SolverDropDown.Layout.Row = 4;
+            app.GridLayout4.RowHeight = {'1x', '1x', '1x', '1x'};
+
+            state = QUSConfigurationLogic.stateIfAvailable(app);
+            if isempty(state)
+                advanced = QUSConfigurationLogic.defaultAdvancedSettings();
+            else
+                advanced = state.advanced;
+            end
+            QUSConfigurationLogic.configurePipelineSummaryControls(app, advanced);
+            QUSConfigurationLogic.updateCalculatedTime(app);
         end
         
         % Aqui se define algunos parametros default (en este caso el
         % inicial es del pipeline enviado)
         function applyDefaults(app)
-            app.DimensionesEditFieldLabel.Text = 'Tamaño axial:';
+            app.DimensionesEditFieldLabel.Text = 'Profundidad:';
             app.ResolucinEditFieldLabel.Text = 'PPW:';
-            app.mLabel_3.Text = '';
-            app.DescripcinLabel.Text = 'Profundidad:';
-            app.DescripcinLabel_2.Text = '[m]';
-            app.DimensionesEditField.Value = 5.6e-2;
+            app.mLabel_3.Text = '[m]';
+            app.DescripcinLabel.Text = 'Tiempo calculado:';
+            app.DescripcinLabel_2.Text = '[µs]';
+            app.DimensionesEditField.Value = 5.5e-2;
             app.ResolucinEditField.Value = 6;
             app.PMLCantcapasEditField.Value = 41;
             app.CFLEditField.Value = 0.3;
             app.VelsonidoEditField.Value = 1595;
             app.DensidadEditField.Value = 1060;
+            densityStdField = QUSConfigurationLogic.densityStdControl(app);
+            densityStdField.Value = 0.04;
 
             % La interfaz usa MHz y MPa; la configuración persistida y
             % k-Wave conservan Hz y Pa para no cambiar el contrato físico.
@@ -497,7 +1080,8 @@ classdef QUSConfigurationLogic
             app.AmplitudEditField_2.Value = 1;
             app.NciclosEditField.Value = 3.5;
             app.NombreEditField.Value = 'homogeneous_benchmark';
-            app.TiempoEditField.Value = 5.5e-2;
+            QUSConfigurationLogic.updateCalculatedTime(app);
+            app.GridSizeEditField.Value = QUSConfigurationLogic.formatGridSize(5.6e-2, 4e-2);
             QUSConfigurationLogic.setDropDown(app.SolverDropDown, 'kspaceFirstoOrder2D');
             defaults = QUSConfigurationLogic.defaultAdvancedSettings();
             QUSConfigurationLogic.configureRealizationControls(app, defaults.reproducibility);
@@ -573,17 +1157,29 @@ classdef QUSConfigurationLogic
         %recoge todos los valores actuales de la interfaz y los organiza en una única estructura llamada configuration
         % para estructurarlos
         function configuration = readCurrentConfiguration(app, advanced)
-            advanced.sensor = QUSConfigurationLogic.normalizeSensorSettings(advanced.sensor);
-            configuration.geometry = struct('grid_size_x', app.DimensionesEditField.Value, ...
-                'grid_size_y', advanced.computation.grid_size_y, 'ppw', app.ResolucinEditField.Value, ...
+            [gridSizeX, gridSizeY] = QUSConfigurationLogic.currentGridSize(app);
+            mediumConfig = MediumConfigurationLogic.forModel(advanced.medium.config, app.ModeloDropDown.Value);
+            mediumConfig.background.sound_speed = app.VelsonidoEditField.Value;
+            mediumConfig.background.density = app.DensidadEditField.Value;
+            mediumConfig.background.acs = advanced.medium.hom_alpha;
+            mediumConfig.background.density_std = QUSConfigurationLogic.densityStdControl(app).Value;
+            mediumConfig.alpha_power = advanced.medium.alpha_power;
+            mediumConfig.alpha_mode = advanced.medium.alpha_mode;
+            mediumConfig.sound_speed_ref = advanced.medium.sound_speed_ref;
+            if strcmp(mediumConfig.kind, 'layers')
+                mediumConfig = MediumConfigurationLogic.setLayerCount(mediumConfig, ...
+                    numel(mediumConfig.layers), 1e3 * app.DimensionesEditField.Value);
+            end
+            configuration.geometry = struct('grid_size_x', gridSizeX, ...
+                'grid_size_y', gridSizeY, 'ppw', app.ResolucinEditField.Value, ...
                 'pml_size_x', app.PMLCantcapasEditField.Value, ...
                 'pml_size_y', advanced.computation.pml_size_y, 'cfl', app.CFLEditField.Value, ...
-                'depth', app.TiempoEditField.Value);
+                'depth', app.DimensionesEditField.Value);
             configuration.medium = struct('model', char(app.ModeloDropDown.Value), ...
                 'sound_speed', app.VelsonidoEditField.Value, 'density', app.DensidadEditField.Value, ...
-                'hom_alpha', advanced.medium.hom_alpha, 'density_std', advanced.medium.density_std, ...
+                'hom_alpha', advanced.medium.hom_alpha, 'density_std', mediumConfig.background.density_std, ...
                 'alpha_power', advanced.medium.alpha_power, 'alpha_mode', advanced.medium.alpha_mode, ...
-                'sound_speed_ref', advanced.medium.sound_speed_ref);
+                'sound_speed_ref', advanced.medium.sound_speed_ref, 'config', mediumConfig);
             configuration.transducer = struct('type', char(app.TipoDropDown.Value), ...
                 'signal', char(app.SealDropDown.Value), 'beam_mode', char(app.MododehazDropDown.Value), ...
                 'frequency', app.FrecuenciaEditField.Value * 1e6, ...
@@ -593,18 +1189,12 @@ classdef QUSConfigurationLogic
                 'element_width', advanced.transducer.element_width, 'focal_number_tx', advanced.transducer.focal_number_tx, ...
                 'focal_number_rx', advanced.transducer.focal_number_rx, 'n_lines', advanced.transducer.n_lines, ...
                 'base_translation_x', advanced.transducer.base_translation_x, ...
-                'base_translation_y', advanced.transducer.base_translation_y, 'rotation', advanced.transducer.rotation);
-            configuration.sensor = struct('type', char(app.TipoDropDown_2.Value), ...
-                'plane', char(app.PlanoDropDown.Value), 'plane_position', char(app.PosicindelplanoDropDown.Value), ...
-                'variables', char(app.VariablesDropDown.Value), 'shared_array', advanced.sensor.shared_array, ...
-                'directivity_size_factor', advanced.sensor.directivity_size_factor, ...
-                'directivity_angle', advanced.sensor.directivity_angle, ...
-                'record_pressure', advanced.sensor.record_pressure, ...
-                'record_rms', advanced.sensor.record_rms, ...
-                'record_peak', advanced.sensor.record_peak);
+                'base_translation_y', advanced.transducer.base_translation_y, 'rotation', advanced.transducer.rotation, ...
+                'receive_directivity_size_factor', advanced.transducer.receive_directivity_size_factor, ...
+                'receive_directivity_angle', advanced.transducer.receive_directivity_angle);
             configuration.computation = struct('data_cast', advanced.computation.data_cast, ...
                 'plot_sim_flag', advanced.computation.plot_sim_flag, ...
-                'solver', char(app.SolverDropDown.Value), 'dt_mode', char(app.dtDropDown.Value));
+                'solver', char(app.SolverDropDown.Value));
             reproducibility = QUSConfigurationLogic.readRealizationControls( ...
                 app, advanced.reproducibility);
             configuration.reproducibility = reproducibility;
@@ -631,6 +1221,8 @@ classdef QUSConfigurationLogic
             if configuration.medium.hom_alpha < 0 || configuration.medium.density_std < 0
                 error('La atenuación y su desviación estándar no pueden ser negativas.');
             end
+            MediumConfigurationLogic.validate(configuration.medium.config, ...
+                1e3 * configuration.geometry.depth, 1e3 * configuration.geometry.grid_size_y);
             if isempty(strtrim(configuration.experiment.name))
                 error('Escribe un nombre para el experimento antes de pulsar Set.');
             end
@@ -642,6 +1234,10 @@ classdef QUSConfigurationLogic
             currentRecords = QUSConfigurationLogic.records(current);
             changes = struct('section', {}, 'parameter', {}, 'value', {}, 'reference', {});
             for index = 1:numel(currentRecords)
+                if ismember(string(currentRecords(index).parameter), ...
+                        ["Active Tx elements", "Receive elements", "Number of elements"])
+                    continue
+                end
                 if ~QUSConfigurationLogic.valuesEqual(currentRecords(index).value, referenceRecords(index).value)
                     changes(end + 1) = struct('section', currentRecords(index).section, ...
                         'parameter', currentRecords(index).parameter, 'value', currentRecords(index).value, ...
@@ -682,37 +1278,49 @@ classdef QUSConfigurationLogic
                     "Pulsa Set para guardar la configuración de referencia."]);
                 return
             end
+
+            selectedIndex = QUSConfigurationLogic.selectedCaseIndex(app, state);
+            [selectedConfiguration, selectedLabel] = ...
+                QUSConfigurationLogic.configurationForSelectedCase(app, state, selectedIndex);
+            lines = QUSConfigurationLogic.appendCaseSelector(lines, state, selectedIndex);
+
             if isempty(state.queue)
                 lines = [lines; ""; "TIPO: (i) CONFIGURACIÓN ÚNICA"; ""; ...
-                    "SIMULACIÓN 1"; "------------------------------------------------"];
+                    "REFERENCIA"; "------------------------------------------------"];
                 lines = QUSConfigurationLogic.appendReference(lines, state.reference);
-                app.TextArea.Value = cellstr([lines; ""; "------------------------------------------------"; "Configuraciones: 1"]);
                 app.EstadoEditField.Value = 'Referencia definida';
-                return
-            end
-
-            sections = unique(string({state.queue.section}), 'stable');
-            if isscalar(sections)
-                lines = [lines; ""; "TIPO: (ii) UNA SECCIÓN VARIABLE"];
             else
-                lines = [lines; ""; "TIPO: (iii) VARIAS SECCIONES VARIABLES"];
-            end
-            for sectionIndex = 1:numel(sections)
-                section = sections(sectionIndex);
-                lines = [lines; ""; "SIMULACIÓN " + sectionIndex; ...
-                    "------------------------------------------------"; upper(section)];
-                for queueIndex = 1:numel(state.queue)
-                    item = state.queue(queueIndex);
-                    if strcmp(item.section, section)
-                        lines(end + 1) = "  " + item.parameter + ": [" + ...
-                            QUSConfigurationLogic.formatValuesForParameter(item.parameter, item.values) + ", REF=" + ...
-                            QUSConfigurationLogic.formatValueForParameter(item.parameter, item.reference) + "]";
+                sections = unique(string({state.queue.section}), 'stable');
+                if isscalar(sections)
+                    lines = [lines; ""; "TIPO: (ii) UNA SECCIÓN VARIABLE"];
+                else
+                    lines = [lines; ""; "TIPO: (iii) VARIAS SECCIONES VARIABLES"];
+                end
+                for sectionIndex = 1:numel(sections)
+                    section = sections(sectionIndex);
+                    lines = [lines; ""; "SIMULACIÓN " + sectionIndex; ...
+                        "------------------------------------------------"; upper(section)];
+                    for queueIndex = 1:numel(state.queue)
+                        item = state.queue(queueIndex);
+                        if strcmp(item.section, section)
+                            lines(end + 1) = "  " + item.parameter + ": [" + ...
+                                QUSConfigurationLogic.formatValuesForParameter(item.parameter, item.values) + ", REF=" + ...
+                                QUSConfigurationLogic.formatValueForParameter(item.parameter, item.reference) + "]";
+                        end
                     end
                 end
             end
-            app.TextArea.Value = cellstr([lines; ""; "================================================"; ...
-                "Secciones variables: " + numel(sections)]);
-            app.EstadoEditField.Value = sprintf('Referencia + %d sección(es)', numel(sections));
+
+            lines = [lines; ""; "================================================"; ...
+                "CONFIGURACIÓN SELECCIONADA: " + selectedLabel; ...
+                "------------------------------------------------"];
+            lines = QUSConfigurationLogic.appendReference(lines, selectedConfiguration);
+            lines = QUSConfigurationLogic.appendMediumDetails(lines, selectedConfiguration.medium.config);
+            lines = QUSConfigurationLogic.appendOutputDetails(lines, selectedConfiguration.output);
+            app.TextArea.Value = cellstr(lines);
+            if ~isempty(state.queue)
+                app.EstadoEditField.Value = sprintf('Referencia + %d sección(es)', numel(sections));
+            end
         end
 
         function updateStatusSummary(app, state, statusText)
@@ -776,10 +1384,142 @@ classdef QUSConfigurationLogic
                 end
             end
         end
+
+        function lines = appendCaseSelector(lines, state, selectedIndex)
+            caseCount = QUSConfigurationLogic.availableCaseCount(state);
+            lines = [lines; ""; "CASOS GUARDADOS"];
+            for index = 1:caseCount
+                marker = "  ";
+                if index == selectedIndex
+                    marker = "→ ";
+                end
+                if index == 1
+                    description = "configuración de referencia";
+                else
+                    description = "configuración guardada en la cola";
+                end
+                lines(end + 1) = marker + QUSConfigurationLogic.caseLabel(index) + ...
+                    ": " + description;
+            end
+        end
+
+        function [configuration, label] = configurationForSelectedCase(app, state, selectedIndex)
+            label = QUSConfigurationLogic.caseLabel(selectedIndex);
+            if isfield(state, 'previewCases') && ...
+                    selectedIndex <= numel(state.previewCases)
+                configuration = state.previewCases(selectedIndex).configuration;
+                return
+            end
+            if isfield(state, 'pipelineCases') && ...
+                    selectedIndex <= numel(state.pipelineCases)
+                % applyPipelineCase ya materializa esta configuración al
+                % seleccionar el elemento del menú. Se conserva aquí como
+                % fallback para la referencia recién abierta.
+                configuration = state.reference;
+                return
+            end
+            configuration = state.reference;
+        end
+
+        function index = selectedCaseIndex(app, state)
+            index = 1;
+            if isprop(app, 'DropDown') && isvalid(app.DropDown)
+                parsedIndex = QUSConfigurationLogic.groupIndex(app.DropDown.Value);
+                if parsedIndex >= 1 && parsedIndex <= QUSConfigurationLogic.availableCaseCount(state)
+                    index = parsedIndex;
+                end
+            end
+        end
+
+        function count = availableCaseCount(state)
+            count = 1;
+            if isfield(state, 'previewCases') && ~isempty(state.previewCases)
+                count = numel(state.previewCases);
+            elseif isfield(state, 'pipelineCases') && ~isempty(state.pipelineCases)
+                count = numel(state.pipelineCases);
+            end
+        end
+
+        function label = caseLabel(index)
+            if index == 1
+                label = "Ref";
+            else
+                label = "Case " + (index - 1);
+            end
+        end
+
+        function lines = appendMediumDetails(lines, config)
+            lines = [lines; ""; "DETALLE DEL MEDIO CONFIGURADO"; ...
+                "  Tipo: " + string(config.kind)];
+            switch config.kind
+                case 'homogeneous'
+                    lines(end + 1) = "  Sin inclusiones ni capas.";
+                case {'single_circle', 'single_shape', 'multiple'}
+                    inclusionCount = 1;
+                    if strcmp(config.kind, 'multiple')
+                        inclusionCount = numel(config.inclusions);
+                    end
+                    for index = 1:inclusionCount
+                        item = config.inclusions(index);
+                        lines = QUSConfigurationLogic.appendInclusionDetails(lines, ...
+                            sprintf('Inclusión %d', index), item);
+                    end
+                case 'layers'
+                    for index = 1:numel(config.layers)
+                        layer = config.layers(index);
+                        lines(end + 1) = "  Capa " + index + ": espesor [mm] = " + ...
+                            QUSConfigurationLogic.formatValue(layer.thickness_mm);
+                        lines = QUSConfigurationLogic.appendAcousticRegion(lines, ...
+                            "    Propiedades", layer.acoustic);
+                    end
+            end
+        end
+
+        function lines = appendInclusionDetails(lines, label, item)
+            lines(end + 1) = "  " + string(label) + ": forma = " + string(item.shape);
+            lines(end + 1) = "    Centro x [mm] = " + ...
+                QUSConfigurationLogic.formatValue(item.center_mm(1));
+            if isnan(item.center_mm(2))
+                lines(end + 1) = "    Centro z [mm] = automático (mitad de la profundidad)";
+            else
+                lines(end + 1) = "    Centro z [mm] = " + ...
+                    QUSConfigurationLogic.formatValue(item.center_mm(2));
+            end
+            switch item.shape
+                case 'circle'
+                    lines(end + 1) = "    Radio [mm] = " + ...
+                        QUSConfigurationLogic.formatValue(item.geometry_mm(1));
+                case 'ellipse'
+                    lines(end + 1) = "    Semieje lateral [mm] = " + ...
+                        QUSConfigurationLogic.formatValue(item.geometry_mm(1));
+                    lines(end + 1) = "    Semieje axial [mm] = " + ...
+                        QUSConfigurationLogic.formatValue(item.geometry_mm(2));
+                case 'irregular'
+                    lines(end + 1) = "    Radio medio [mm] = " + ...
+                        QUSConfigurationLogic.formatValue(item.geometry_mm(1));
+                    lines(end + 1) = "    Perturbación = " + ...
+                        QUSConfigurationLogic.formatValue(item.geometry_mm(2));
+            end
+            lines = QUSConfigurationLogic.appendAcousticRegion(lines, ...
+                "    Propiedades", item.acoustic);
+        end
+
+        function lines = appendAcousticRegion(lines, label, region)
+            lines(end + 1) = string(label) + ": c [m/s] = " + ...
+                QUSConfigurationLogic.formatValue(region.sound_speed) + ...
+                ", ρ [kg/m³] = " + QUSConfigurationLogic.formatValue(region.density) + ...
+                ", ACS [dB/cm/MHz] = " + QUSConfigurationLogic.formatValue(region.acs) + ...
+                ", σρ = " + QUSConfigurationLogic.formatValue(region.density_std);
+        end
+
+        function lines = appendOutputDetails(lines, output)
+            lines = [lines; ""; "SALIDAS"; ...
+                "  Guardar preview del medio = " + string(output.save_medium_previews); ...
+                "  Guardar RF prebeamformed = " + string(output.save_rf_prebeamformed)];
+        end
         
         %tiene que ver con la GUI
         function items = records(configuration)
-            configuration.sensor = QUSConfigurationLogic.normalizeSensorSettings(configuration.sensor);
             items = struct('section', {}, 'parameter', {}, 'value', {});
             add = @(section, parameter, value) struct('section', section, 'parameter', parameter, 'value', value);
             items(end + 1) = add('Geometría y malla', 'Tamaño axial [m]', configuration.geometry.grid_size_x);
@@ -792,7 +1532,7 @@ classdef QUSConfigurationLogic
             items(end + 1) = add('Medio acústico', 'Modelo', string(configuration.medium.model));
             items(end + 1) = add('Medio acústico', 'Velocidad de sonido [m/s]', configuration.medium.sound_speed);
             items(end + 1) = add('Medio acústico', 'Densidad [kg/m^3]', configuration.medium.density);
-            items(end + 1) = add('Medio acústico', 'Atenuación [dB/(MHz^y cm)]', configuration.medium.hom_alpha);
+            items(end + 1) = add('Medio acústico', 'ACS [dB/cm/MHz]', configuration.medium.hom_alpha);
             items(end + 1) = add('Medio acústico', 'Desviación de densidad', configuration.medium.density_std);
             items(end + 1) = add('Medio acústico', 'Alpha power', configuration.medium.alpha_power);
             items(end + 1) = add('Medio acústico', 'Modo de absorción', string(configuration.medium.alpha_mode));
@@ -806,29 +1546,28 @@ classdef QUSConfigurationLogic
             items(end + 1) = add('Transductor emisor', 'Frecuencia [MHz]', configuration.transducer.frequency);
             items(end + 1) = add('Transductor emisor', 'Amplitud [MPa]', configuration.transducer.amplitude);
             items(end + 1) = add('Transductor emisor', 'N.º ciclos', configuration.transducer.cycles);
-            items(end + 1) = add('Transductor emisor', 'Foco [m]', configuration.transducer.source_focus);
+            items(end + 1) = add('Transductor emisor', 'Focal depth [m]', configuration.transducer.source_focus);
             items(end + 1) = add('Transductor emisor', 'Pitch [m]', configuration.transducer.element_pitch);
-            items(end + 1) = add('Transductor emisor', 'Ancho [m]', configuration.transducer.element_width);
-            items(end + 1) = add('Transductor emisor', 'F-number Tx', configuration.transducer.focal_number_tx);
-            items(end + 1) = add('Transductor emisor', 'F-number Rx', configuration.transducer.focal_number_rx);
-            items(end + 1) = add('Transductor emisor', 'Líneas de escaneo', configuration.transducer.n_lines);
-            items(end + 1) = add('Transductor emisor', 'Traslación axial [m]', configuration.transducer.base_translation_x);
-            items(end + 1) = add('Transductor emisor', 'Traslación lateral [m]', configuration.transducer.base_translation_y);
-            items(end + 1) = add('Transductor emisor', 'Rotación [rad]', configuration.transducer.rotation);
-            items(end + 1) = add('Sensor', 'Tipo', string(configuration.sensor.type));
-            items(end + 1) = add('Sensor', 'Plano', string(configuration.sensor.plane));
-            items(end + 1) = add('Sensor', 'Posición', string(configuration.sensor.plane_position));
-            items(end + 1) = add('Sensor', 'Variables', string(configuration.sensor.variables));
-            items(end + 1) = add('Sensor', 'Arreglo compartido', configuration.sensor.shared_array);
-            items(end + 1) = add('Sensor', 'Factor de directividad', configuration.sensor.directivity_size_factor);
-            items(end + 1) = add('Sensor', 'Ángulo de directividad [rad]', configuration.sensor.directivity_angle);
-            items(end + 1) = add('Sensor', 'Guardar p', configuration.sensor.record_pressure);
-            items(end + 1) = add('Sensor', 'Guardar p_rms', configuration.sensor.record_rms);
-            items(end + 1) = add('Sensor', 'Guardar p_max', configuration.sensor.record_peak);
+            items(end + 1) = add('Transductor emisor', 'Element width [m]', configuration.transducer.element_width);
+            items(end + 1) = add('Transductor emisor', 'Focal number Tx', configuration.transducer.focal_number_tx);
+            items(end + 1) = add('Transductor emisor', 'Focal number Rx', configuration.transducer.focal_number_rx);
+            activeTxElements = floor((configuration.transducer.source_focus / ...
+                configuration.transducer.focal_number_tx) / configuration.transducer.element_pitch);
+            receiveElements = floor((configuration.transducer.source_focus / ...
+                configuration.transducer.focal_number_rx) / configuration.transducer.element_pitch);
+            items(end + 1) = add('Transductor emisor', 'Active Tx elements', activeTxElements);
+            items(end + 1) = add('Transductor emisor', 'Receive elements', receiveElements);
+            items(end + 1) = add('Transductor emisor', 'Number of elements', receiveElements);
+            items(end + 1) = add('Transductor emisor', 'Number of beams', configuration.transducer.n_lines);
+            items(end + 1) = add('Posición', 'Axial translation [m]', configuration.transducer.base_translation_x);
+            items(end + 1) = add('Posición', 'Lateral translation [m]', configuration.transducer.base_translation_y);
+            items(end + 1) = add('Transductor emisor', 'Factor de directividad de recepción', ...
+                configuration.transducer.receive_directivity_size_factor);
+            items(end + 1) = add('Transductor emisor', 'Ángulo de directividad de recepción [rad]', ...
+                configuration.transducer.receive_directivity_angle);
             items(end + 1) = add('Cálculo', 'DataCast', string(configuration.computation.data_cast));
             items(end + 1) = add('Cálculo', 'PlotSim', configuration.computation.plot_sim_flag);
             items(end + 1) = add('Cálculo', 'Solver', string(configuration.computation.solver));
-            items(end + 1) = add('Cálculo', 'Modo dt', string(configuration.computation.dt_mode));
             items(end + 1) = add('Reproducibilidad', 'Semilla global', configuration.reproducibility.rng_seed);
             items(end + 1) = add('Reproducibilidad', 'Semilla base de referencias', configuration.reproducibility.ref_seed_base);
             items(end + 1) = add('Reproducibilidad', 'nRefs de objetivos', configuration.reproducibility.n_refs_target);
@@ -902,9 +1641,33 @@ classdef QUSConfigurationLogic
             advanced.medium = struct('hom_alpha', reference.medium.hom_alpha, ...
                 'density_std', reference.medium.density_std, 'alpha_power', reference.medium.alpha_power, ...
                 'alpha_mode', reference.medium.alpha_mode, 'sound_speed_ref', reference.medium.sound_speed_ref);
+            if isfield(reference.medium, 'config')
+                advanced.medium.config = reference.medium.config;
+            else
+                advanced.medium.config = MediumConfigurationLogic.defaultConfig();
+                advanced.medium.config.background.sound_speed = reference.medium.sound_speed;
+                advanced.medium.config.background.density = reference.medium.density;
+                advanced.medium.config.background.acs = reference.medium.hom_alpha;
+                advanced.medium.config.background.density_std = reference.medium.density_std;
+            end
             advanced.transducer = rmfield(reference.transducer, ...
                 {'type', 'signal', 'beam_mode', 'frequency', 'amplitude', 'cycles'});
-            advanced.sensor = QUSConfigurationLogic.normalizeSensorSettings(reference.sensor);
+            if ~isfield(advanced.transducer, 'receive_directivity_size_factor')
+                advanced.transducer.receive_directivity_size_factor = 10;
+            end
+            if ~isfield(advanced.transducer, 'receive_directivity_angle')
+                advanced.transducer.receive_directivity_angle = 0;
+            end
+            if isfield(reference, 'sensor')
+                if isfield(reference.sensor, 'directivity_size_factor')
+                    advanced.transducer.receive_directivity_size_factor = ...
+                        reference.sensor.directivity_size_factor;
+                end
+                if isfield(reference.sensor, 'directivity_angle')
+                    advanced.transducer.receive_directivity_angle = ...
+                        reference.sensor.directivity_angle;
+                end
+            end
             advanced.computation = struct('grid_size_y', reference.geometry.grid_size_y, ...
                 'pml_size_y', reference.geometry.pml_size_y, ...
                 'data_cast', reference.computation.data_cast, ...
@@ -915,14 +1678,18 @@ classdef QUSConfigurationLogic
         
         %Se aplican los cambios en la app de los valores cambiados
         function applyConfiguration(app, configuration)
-            app.DimensionesEditField.Value = configuration.geometry.grid_size_x;
+            app.DimensionesEditField.Value = configuration.geometry.depth;
+            app.GridSizeEditField.Value = QUSConfigurationLogic.formatGridSize( ...
+                configuration.geometry.grid_size_x, configuration.geometry.grid_size_y);
             app.ResolucinEditField.Value = configuration.geometry.ppw;
             app.PMLCantcapasEditField.Value = configuration.geometry.pml_size_x;
             app.CFLEditField.Value = configuration.geometry.cfl;
-            app.TiempoEditField.Value = configuration.geometry.depth;
             QUSConfigurationLogic.setDropDown(app.ModeloDropDown, configuration.medium.model);
             app.VelsonidoEditField.Value = configuration.medium.sound_speed;
             app.DensidadEditField.Value = configuration.medium.density;
+            densityStdField = QUSConfigurationLogic.densityStdControl(app);
+            densityStdField.Value = configuration.medium.density_std;
+            QUSConfigurationLogic.updateCalculatedTime(app);
             QUSConfigurationLogic.setDropDown(app.TipoDropDown, configuration.transducer.type);
             QUSConfigurationLogic.setDropDown(app.SealDropDown, configuration.transducer.signal);
             QUSConfigurationLogic.setDropDown(app.MododehazDropDown, configuration.transducer.beam_mode);
@@ -931,15 +1698,16 @@ classdef QUSConfigurationLogic
             app.FrecuenciaEditField.Value = configuration.transducer.frequency / 1e6;
             app.AmplitudEditField_2.Value = configuration.transducer.amplitude / 1e6;
             app.NciclosEditField.Value = configuration.transducer.cycles;
-            QUSConfigurationLogic.setDropDown(app.TipoDropDown_2, configuration.sensor.type);
-            SensorPanelLogic.updateForSensorType(app);
-            QUSConfigurationLogic.setDropDown(app.PlanoDropDown, configuration.sensor.plane);
-            QUSConfigurationLogic.setDropDown(app.PosicindelplanoDropDown, configuration.sensor.plane_position);
-            QUSConfigurationLogic.setDropDown(app.VariablesDropDown, configuration.sensor.variables);
             QUSConfigurationLogic.setDropDown(app.SolverDropDown, configuration.computation.solver);
-            QUSConfigurationLogic.setDropDown(app.dtDropDown, configuration.computation.dt_mode);
             app.NombreEditField.Value = configuration.experiment.name;
             QUSConfigurationLogic.configureRealizationControls(app, configuration.reproducibility);
+            state = QUSConfigurationLogic.stateIfAvailable(app);
+            if ~isempty(state)
+                state.advanced.computation.data_cast = configuration.computation.data_cast;
+                state.advanced.computation.plot_sim_flag = configuration.computation.plot_sim_flag;
+                state.advanced.reproducibility = configuration.reproducibility;
+                QUSConfigurationLogic.configurePipelineSummaryControls(app, state.advanced);
+            end
         end
 
         % Traduce la estructura de la GUI a los nombres del pipeline
@@ -975,8 +1743,8 @@ classdef QUSConfigurationLogic
                 'DATA_CAST', configuration.computation.data_cast, ...
                 'plotSimFlag', configuration.computation.plot_sim_flag, ...
                 'solverName', configuration.computation.solver, ...
-                'directivity_size_factor', configuration.sensor.directivity_size_factor, ...
-                'directivity_angle', configuration.sensor.directivity_angle, ...
+                'directivity_size_factor', configuration.transducer.receive_directivity_size_factor, ...
+                'directivity_angle', configuration.transducer.receive_directivity_angle, ...
                 'nRefsTarget', configuration.reproducibility.n_refs_target, ...
                 'nRefsReference', configuration.reproducibility.n_refs_reference, ...
                 'refSeedBase', configuration.reproducibility.ref_seed_base, ...
@@ -991,20 +1759,309 @@ classdef QUSConfigurationLogic
             end
         end
 
-        % El MAT queda disponible para Open Config, pero el pipeline se
-        % genera autocontenido para poder enviarlo solo al cluster.
-        function writePipelineScript(pipelinePath, ~, configuration)
-
-            reference = configuration.reference;
-            if ~strcmpi(reference.medium.model, 'Homogeneo')
-                error(['El generador actual crea el pipeline homogéneo de k-Wave. ' ...
-                    'Selecciona el modelo Homogeneo para esta primera versión.']);
+        function parametersByCase = readPipelineCases(pipelinePath)
+            if ~isfile(pipelinePath)
+                error('No se encontró el pipeline: %s.', pipelinePath);
+            end
+            [pipelineFolder, pipelineFunctionName] = fileparts(pipelinePath);
+            if ~isvarname(pipelineFunctionName)
+                error('El archivo seleccionado no tiene un nombre de función MATLAB válido.');
             end
 
-            cases = QUSConfigurationLogic.materializeExperimentCases(reference, configuration.queue);
+            addpath(pipelineFolder, '-begin');
+            cleanup = onCleanup(@() rmpath(pipelineFolder));
+            eval("clear " + string(pipelineFunctionName));
+            parametersByCase = feval(pipelineFunctionName, 'gui_cases');
+            if ~isstruct(parametersByCase) || isempty(parametersByCase)
+                error(['El pipeline no devolvió casos válidos. Selecciona un .m guardado ' ...
+                    'por esta versión de la aplicación.']);
+            end
+            for caseIndex = 1:numel(parametersByCase)
+                QUSConfigurationLogic.validatePipelineCaseParameters(parametersByCase(caseIndex), caseIndex);
+            end
+            clear cleanup
+        end
+
+        function state = applyPipelineCase(app, state, caseIndex)
+            parameters = state.pipelineCases(caseIndex);
+            [configuration, advanced] = QUSConfigurationLogic.configurationFromPipelineParameters( ...
+                app, state.advanced, parameters);
+            state.referenceDefined = true;
+            state.reference = configuration;
+            state.advanced = advanced;
+            state.selectedPipelineCase = caseIndex;
+            QUSConfigurationLogic.applyConfiguration(app, configuration);
+        end
+
+        function state = recordPreviewCase(app, state, configuration)
+            % Set conserva una instantánea completa para que Group restaure
+            % exactamente lo que quedó en cola, incluido el medio avanzado.
+            if ~isfield(state, 'previewCases') || isempty(state.previewCases)
+                state.previewCases = struct('configuration', configuration);
+            else
+                state.previewCases(end + 1) = struct('configuration', configuration);
+            end
+            QUSConfigurationLogic.configureGroupSelector(app, ...
+                numel(state.previewCases), numel(state.previewCases));
+        end
+
+        function queue = rebuildQueueFromPreviewCases(state)
+            % La cola se deriva de las instantáneas restantes para que al
+            % borrar un Case desaparezcan también sus valores del plan.
+            queue = QUSConfigurationLogic.emptyQueue();
+            for caseIndex = 2:numel(state.previewCases)
+                current = state.previewCases(caseIndex).configuration;
+                changes = QUSConfigurationLogic.detectChanges(state.reference, current);
+                for changeIndex = 1:numel(changes)
+                    queue = QUSConfigurationLogic.addChange(queue, changes(changeIndex));
+                end
+            end
+        end
+
+        function configureDeleteButton(app, state)
+            if ~isprop(app, 'PruebaButton') || ~isvalid(app.PruebaButton)
+                return
+            end
+            app.PruebaButton.Text = 'Delete';
+            app.PruebaButton.ButtonPushedFcn = @(~, ~) ...
+                QUSConfigurationLogic.onDeleteSelectedCase(app);
+            selectedIndex = QUSConfigurationLogic.selectedCaseIndex(app, state);
+            hasDeletableCase = selectedIndex > 1 && ...
+                QUSConfigurationLogic.availableCaseCount(state) >= selectedIndex;
+            if hasDeletableCase
+                app.PruebaButton.Enable = 'on';
+            else
+                app.PruebaButton.Enable = 'off';
+            end
+        end
+
+        function parametersByCase = referenceFirst(parametersByCase)
+            referenceIndex = find([parametersByCase.isReference], 1, 'first');
+            if isempty(referenceIndex)
+                error('El pipeline abierto no contiene una configuración de referencia.');
+            end
+            otherIndexes = setdiff(1:numel(parametersByCase), referenceIndex, 'stable');
+            parametersByCase = parametersByCase([referenceIndex, otherIndexes]);
+        end
+
+        function [configuration, advanced] = configurationFromPipelineParameters(app, advanced, parameters)
+            configuration = QUSConfigurationLogic.readCurrentConfiguration(app, advanced);
+            pmlSize = double(parameters.PMLSize(:).');
+            if numel(pmlSize) ~= 2 || any(~isfinite(pmlSize)) || any(pmlSize <= 0)
+                error('El parámetro PMLSize del pipeline debe contener dos valores positivos.');
+            end
+
+            advanced.medium.hom_alpha = parameters.hom_alpha;
+            advanced.medium.density_std = parameters.density_std;
+            advanced.medium.alpha_power = parameters.alpha_power;
+            advanced.medium.alpha_mode = char(string(parameters.alpha_mode));
+            advanced.medium.sound_speed_ref = parameters.sound_speed_ref;
+            advanced.medium.config = QUSConfigurationLogic.mediumConfigFromPipelineParameters( ...
+                parameters, advanced.medium);
+            advanced.transducer.source_focus = parameters.source_focus;
+            advanced.transducer.element_pitch = parameters.element_pitch;
+            advanced.transducer.element_width = parameters.element_width;
+            advanced.transducer.focal_number_tx = parameters.focal_number_Tx;
+            advanced.transducer.focal_number_rx = parameters.focal_number_Rx;
+            advanced.transducer.n_lines = parameters.nLines;
+            advanced.transducer.base_translation_x = parameters.base_translation(1);
+            advanced.transducer.base_translation_y = parameters.base_translation(2);
+            advanced.transducer.rotation = parameters.rotation;
+            advanced.computation.grid_size_y = parameters.grid_size_y;
+            advanced.computation.pml_size_y = pmlSize(2);
+            advanced.computation.data_cast = char(string(parameters.DATA_CAST));
+            advanced.computation.plot_sim_flag = logical(parameters.plotSimFlag);
+            advanced.reproducibility.ref_seed_base = parameters.refSeedBase;
+            if parameters.isReference
+                advanced.reproducibility.n_refs_reference = parameters.nRefs;
+            else
+                advanced.reproducibility.n_refs_target = parameters.nRefs;
+            end
+            advanced.output.save_medium_previews = logical(parameters.saveMediumPreviews);
+            advanced.output.save_rf_prebeamformed = logical(parameters.saveRfPrebeamformed);
+            advanced.transducer.receive_directivity_size_factor = parameters.directivity_size_factor;
+            advanced.transducer.receive_directivity_angle = parameters.directivity_angle;
+
+            configuration.geometry.grid_size_x = parameters.grid_size_x;
+            configuration.geometry.grid_size_y = parameters.grid_size_y;
+            configuration.geometry.ppw = parameters.ppw;
+            configuration.geometry.pml_size_x = pmlSize(1);
+            configuration.geometry.pml_size_y = pmlSize(2);
+            configuration.geometry.cfl = parameters.cfl;
+            configuration.geometry.depth = parameters.depth;
+            configuration.medium.model = char(string(parameters.mediumModel));
+            configuration.medium.sound_speed = parameters.c0;
+            configuration.medium.density = parameters.rho0;
+            configuration.medium.hom_alpha = parameters.hom_alpha;
+            configuration.medium.density_std = parameters.density_std;
+            configuration.medium.alpha_power = parameters.alpha_power;
+            configuration.medium.alpha_mode = char(string(parameters.alpha_mode));
+            configuration.medium.sound_speed_ref = parameters.sound_speed_ref;
+            configuration.transducer.frequency = parameters.source_f0;
+            configuration.transducer.amplitude = parameters.source_amp;
+            configuration.transducer.cycles = parameters.source_cycles;
+            configuration.transducer.type = char(string(parameters.transducerType));
+            configuration.transducer.signal = char(string(parameters.transducerSignal));
+            configuration.transducer.beam_mode = char(string(parameters.transducerBeamMode));
+            configuration.transducer.source_focus = parameters.source_focus;
+            configuration.transducer.element_pitch = parameters.element_pitch;
+            configuration.transducer.element_width = parameters.element_width;
+            configuration.transducer.focal_number_tx = parameters.focal_number_Tx;
+            configuration.transducer.focal_number_rx = parameters.focal_number_Rx;
+            configuration.transducer.n_lines = parameters.nLines;
+            configuration.transducer.base_translation_x = parameters.base_translation(1);
+            configuration.transducer.base_translation_y = parameters.base_translation(2);
+            configuration.transducer.rotation = parameters.rotation;
+            configuration.transducer.receive_directivity_size_factor = parameters.directivity_size_factor;
+            configuration.transducer.receive_directivity_angle = parameters.directivity_angle;
+            configuration.computation.data_cast = char(string(parameters.DATA_CAST));
+            configuration.computation.plot_sim_flag = logical(parameters.plotSimFlag);
+            configuration.computation.solver = char(string(parameters.solverName));
+            advanced.reproducibility.rng_seed = parameters.rngSeed;
+            configuration.reproducibility = advanced.reproducibility;
+            configuration.output = advanced.output;
+            configuration.experiment.name = char(string(parameters.simuName));
+        end
+
+        function config = mediumConfigFromPipelineParameters(parameters, mediumSettings)
+            if isfield(mediumSettings, 'config')
+                config = mediumSettings.config;
+            else
+                config = MediumConfigurationLogic.defaultConfig();
+            end
+            config = MediumConfigurationLogic.forModel(config, parameters.mediumModel);
+            config.background = struct('sound_speed', parameters.c0, ...
+                'density', parameters.rho0, 'acs', parameters.hom_alpha, ...
+                'density_std', parameters.density_std);
+            config.alpha_power = parameters.alpha_power;
+            config.alpha_mode = char(string(parameters.alpha_mode));
+            config.sound_speed_ref = parameters.sound_speed_ref;
+            inclusionFields = {'inclusionShape', 'inclusionCenterMm', ...
+                'inclusionGeometryMm', 'inclusionAlpha'};
+            if all(isfield(parameters, inclusionFields))
+                count = numel(parameters.inclusionAlpha);
+                prototype = config.inclusions(1);
+                inclusions = repmat(prototype, 1, count);
+                for index = 1:count
+                    inclusions(index).shape = char(string(parameters.inclusionShape{index}));
+                    inclusions(index).center_mm = parameters.inclusionCenterMm(index, :);
+                    inclusions(index).geometry_mm = parameters.inclusionGeometryMm(index, :);
+                    inclusions(index).acoustic = struct( ...
+                        'sound_speed', parameters.c0, ...
+                        'density', parameters.rho0, ...
+                        'acs', parameters.inclusionAlpha(index), ...
+                        'density_std', parameters.density_std);
+                end
+                config.inclusions = inclusions;
+            end
+            layerFields = {'layerThicknessMm', 'layerAlpha'};
+            if all(isfield(parameters, layerFields)) && ~isempty(parameters.layerAlpha)
+                count = numel(parameters.layerAlpha);
+                layers = repmat(struct('thickness_mm', 0, 'acoustic', config.background), 1, count);
+                for index = 1:count
+                    layers(index).thickness_mm = parameters.layerThicknessMm(index);
+                    layers(index).acoustic = struct( ...
+                        'sound_speed', parameters.c0, ...
+                        'density', parameters.rho0, ...
+                        'acs', parameters.layerAlpha(index), ...
+                        'density_std', parameters.density_std);
+                end
+                config.layers = layers;
+            end
+        end
+
+        function validatePipelineCaseParameters(parameters, caseIndex)
+            required = {'isReference', 'nRefs', 'refSeedBase', 'c0', 'rho0', 'hom_alpha', ...
+                'density_std', 'simuName', 'source_f0', 'source_amp', 'source_cycles', ...
+                'source_focus', 'element_pitch', 'element_width', 'focal_number_Tx', ...
+                'focal_number_Rx', 'nLines', 'grid_size_x', 'grid_size_y', ...
+                'base_translation', 'rotation', 'DATA_CAST', 'ppw', 'depth', 'cfl', ...
+                'PMLSize', 'plotSimFlag', 'alpha_power', 'alpha_mode', ...
+                'sound_speed_ref', 'saveMediumPreviews', 'saveRfPrebeamformed', ...
+                'directivity_size_factor', 'directivity_angle', 'solverName', 'rngSeed', 'mediumModel', ...
+                'transducerType', 'transducerSignal', 'transducerBeamMode'};
+            missing = required(~isfield(parameters, required));
+            if ~isempty(missing)
+                error('%s no tiene: %s.', QUSConfigurationLogic.caseLabel(caseIndex), ...
+                    strjoin(missing, ', '));
+            end
+            numericValues = [parameters.nRefs, parameters.c0, parameters.rho0, ...
+                parameters.source_f0, parameters.source_amp, parameters.source_cycles, ...
+                parameters.source_focus, parameters.element_pitch, parameters.element_width, ...
+                parameters.focal_number_Tx, parameters.focal_number_Rx, parameters.nLines, ...
+                parameters.grid_size_x, parameters.grid_size_y, parameters.ppw, ...
+                parameters.depth, parameters.cfl, parameters.alpha_power, parameters.sound_speed_ref];
+            if any(~isfinite(numericValues)) || any(numericValues <= 0) || ...
+                    numel(parameters.base_translation) ~= 2
+                error('%s contiene parámetros físicos inválidos.', ...
+                    QUSConfigurationLogic.caseLabel(caseIndex));
+            end
+        end
+
+        function configureGroupSelector(app, groupCount, selectedIndex)
+            if ~isprop(app, 'DropDown') || ~isvalid(app.DropDown)
+                return
+            end
+            items = cell(1, groupCount);
+            for index = 1:groupCount
+                items{index} = char(QUSConfigurationLogic.caseLabel(index));
+            end
+            app.DropDown.Items = items;
+            app.DropDown.Value = items{selectedIndex};
+            app.DropDown.Enable = 'on';
+        end
+
+        function index = groupIndex(groupName)
+            groupName = string(groupName);
+            if strcmpi(groupName, "Ref")
+                index = 1;
+                return
+            end
+            tokens = regexp(char(groupName), '^Case\s+(\d+)$', 'tokens', 'once');
+            if isempty(tokens), index = 0; else, index = str2double(tokens{1}) + 1; end
+        end
+
+        function [gridSizeX, gridSizeY] = parseGridSize(value)
+            tokens = regexp(strtrim(char(string(value))), '^\(\s*([^,]+)\s*,\s*([^\)]+)\s*\)$', ...
+                'tokens', 'once');
+            if isempty(tokens)
+                error('Grid Size debe tener el formato (x,y) en metros, por ejemplo (0.056,0.04).');
+            end
+            gridSizeX = str2double(tokens{1});
+            gridSizeY = str2double(tokens{2});
+            if ~isfinite(gridSizeX) || ~isfinite(gridSizeY) || gridSizeX <= 0 || gridSizeY <= 0
+                error('Los dos valores de Grid Size deben ser números positivos en metros.');
+            end
+        end
+
+        function text = formatGridSize(gridSizeX, gridSizeY)
+            text = sprintf('(%.12g,%.12g)', gridSizeX, gridSizeY);
+        end
+
+        % El pipeline .m es autocontenido: se ejecuta en el cluster y
+        % expone sus casos para que Open Config los pueda recuperar.
+        function writePipelineScript(pipelinePath, state)
+
+            reference = state.reference;
+            cases = QUSConfigurationLogic.materializeExperimentCases(reference, state.queue);
             isAlphaSweep = ~isempty(cases) && all([cases.isAlphaSweep]);
+            [~, pipelineFunctionName] = fileparts(pipelinePath);
+            if ~isvarname(pipelineFunctionName)
+                error('El nombre del pipeline debe ser un identificador válido de MATLAB.');
+            end
             lines = [ ...
-                "%% Homogeneous reference simulations"; "clearvars"; "clc"; ""; ...
+                "function guiCases = " + string(pipelineFunctionName) + "(mode)"; ...
+                "if nargin == 1"; ...
+                "    if strcmp(mode, 'gui_cases')"; ...
+                "        guiCases = getGuiCaseCatalog();"; ...
+                "        return"; ...
+                "    end"; ...
+                "    error('Modo no reconocido: %s', mode);"; ...
+                "elseif nargin > 1"; ...
+                "    error('El pipeline acepta como máximo un argumento.');"; ...
+                "end"; ""; ...
+                "guiCases = [];"; ...
+                "%% Homogeneous reference simulations"; "clc"; ""; ...
                 "scriptFolder = fileparts(mfilename('fullpath'));"; ...
                 "if isempty(scriptFolder), scriptFolder = pwd; end;"; ...
                 "cd(scriptFolder);"; ...
@@ -1083,9 +2140,15 @@ classdef QUSConfigurationLogic
                 "    element_num_Tx = floor(aperture_Tx / element_pitch);"; ...
                 "    element_num = floor(aperture_Rx / element_pitch);"; ""; ...
                 "    amp_vector = source_amp * ones(element_num, 1);"; ""; ...
-                "    no_Tx_elements = floor((element_num - element_num_Tx) / 2);"; ...
-                "    amp_vector(1:no_Tx_elements) = 0;"; ...
-                "    amp_vector(end-no_Tx_elements+1:end) = 0;"; ""; ...
+                "    inactive_Tx_elements = element_num - element_num_Tx;"; ...
+                "    left_inactive_Tx = floor(inactive_Tx_elements / 2);"; ...
+                "    right_inactive_Tx = ceil(inactive_Tx_elements / 2);"; ...
+                "    if left_inactive_Tx > 0"; ...
+                "        amp_vector(1:left_inactive_Tx) = 0;"; ...
+                "    end"; ...
+                "    if right_inactive_Tx > 0"; ...
+                "        amp_vector(end-right_inactive_Tx+1:end) = 0;"; ...
+                "    end"; ""; ...
                 "    % Set indices for each element"; ...
                 "    ids = (0:element_num-1) - (element_num-1)/2;"; ""; ...
                 "    % Set time delays for each element to focus at source_focus"; ...
@@ -1120,14 +2183,36 @@ classdef QUSConfigurationLogic
                 "        fprintf('Running homogeneous reference %d of %d\\n', iRef, nRefs);"; ...
                 "        fprintf('Seed: %d\\n', refSeed);"; ...
                 "        fprintf('========================================\\n');"; ""; ...
-                "        %% Homogeneous medium"; ""; ...
-                "        medium = makeHomogeneousDensityOnlyMedium( ..."; ...
-                "            Nx, Ny, c0, rho0, density_std, hom_alpha);"; ""; ...
+                "        %% Acoustic medium"; ""; ...
+                "        if strcmpi(parameters.mediumModel, 'Homogeneo')"; ...
+                "            medium = makeHomogeneousDensityOnlyMedium( ..."; ...
+                "                Nx, Ny, c0, rho0, density_std, hom_alpha);"; ...
+                "        elseif strcmpi(parameters.mediumModel, 'Inclusión circular')"; ...
+                "            medium = makeCircularInclusion(Nx, Ny, dx, base_translation(1), ..."; ...
+                "                c0, rho0, density_std, hom_alpha, parameters.inclusionCenterMm, ..."; ...
+                "                parameters.inclusionGeometryMm, parameters.inclusionAlpha);"; ...
+                "        elseif any(strcmpi(parameters.mediumModel, {'Inclusión irregular', 'Inclusión elipsoidal'}))"; ...
+                "            medium = makeIrregularInclusion(Nx, Ny, dx, base_translation(1), ..."; ...
+                "                c0, rho0, density_std, hom_alpha, parameters.inclusionShape{1}, ..."; ...
+                "                parameters.inclusionCenterMm(1, :), parameters.inclusionGeometryMm(1, :), ..."; ...
+                "                parameters.inclusionAlpha(1));"; ...
+                "        elseif strcmpi(parameters.mediumModel, 'Múltiples inclusiones')"; ...
+                "            medium = makeMultipleInclusion(Nx, Ny, dx, base_translation(1), ..."; ...
+                "                c0, rho0, density_std, hom_alpha, parameters.inclusionShape, ..."; ...
+                "                parameters.inclusionCenterMm, parameters.inclusionGeometryMm, ..."; ...
+                "                parameters.inclusionAlpha);"; ...
+                "        elseif any(strcmpi(parameters.mediumModel, {'Medio por capas', 'Capas'}))"; ...
+                "            medium = makeMultipleLayers(Nx, Ny, dx, base_translation(1), ..."; ...
+                "                c0, rho0, density_std, hom_alpha, parameters.layerThicknessMm, ..."; ...
+                "                parameters.layerAlpha);"; ...
+                "        else"; ...
+                "            error('Modelo acústico no reconocido: %s', parameters.mediumModel);"; ...
+                "        end"; ""; ...
                 "        medium.alpha_power = alpha_power;"; ...
                 "        medium.alpha_mode = alpha_mode;"; ...
                 "        medium.sound_speed_ref = sound_speed_ref;"; ""; ...
                 "        %% Medium properties"; ...
-                "        % Same sound-speed, density and absorption preview as the baseline."; ...
+                "        % Same sound-speed, density and ACS preview as the baseline."; ...
                 "        if saveMediumPreviews"; ...
                 "            saveMediumPreview(kgrid, medium, base_translation, outputFolder, iRef);"; ...
                 "        end"; ""; ...
@@ -1162,6 +2247,7 @@ classdef QUSConfigurationLogic
                 "        axAxis = (0:kgrid.Nt-1) * kgrid.dt * c0 / 2;"; ...
                 "        z = axAxis(offset:end);"; ...
                 "        x = yCords;"; ""; ...
+                "        active_tx_elements = element_num_Tx;"; ...
                 "        density_map = medium.density;"; ...
                 "        alpha_coeff = medium.alpha_coeff;"; ...
                 "        sound_speed = medium.sound_speed;"; ""; ...
@@ -1173,7 +2259,7 @@ classdef QUSConfigurationLogic
                 "                'density_std', 'hom_alpha', 'c0', 'rho0', ..."; ...
                 "                'source_f0', 'source_amp', 'source_cycles', 'source_focus', ..."; ...
                 "                'element_pitch', 'element_width', ..."; ...
-                "                'focal_number_Tx', 'focal_number_Rx', 'nLines', 'depth', ..."; ...
+                "                'focal_number_Tx', 'focal_number_Rx', 'active_tx_elements', 'nLines', 'depth', ..."; ...
                 "                'grid_size_x', 'grid_size_y', 'dx', 'ppw', 'cfl', 'PMLSize', ..."; ...
                 "                'refSeed', 'iRef', 'simuName', '-v7.3');"; ...
                 "        else"; ...
@@ -1188,8 +2274,10 @@ classdef QUSConfigurationLogic
                 "        'manifest', 'nRefs', 'refSeedBase', 'density_std', 'hom_alpha');"; ""; ...
                 "    fprintf('\\nDone. Saved %d homogeneous reference files in:\\n%s\\n', ..."; ...
                 "        nRefs, outputFolder);"; "end"; ""; ...
+                "end"; ""; ...
                 "%% Local helper functions"; ""; ...
                 QUSConfigurationLogic.generatedCaseParametersFunction(cases, isAlphaSweep); ""; ...
+                QUSConfigurationLogic.generatedCaseCatalogFunction(cases, isAlphaSweep); ""; ...
                 QUSConfigurationLogic.generatedHelperFunctions()];
 
             fileId = fopen(pipelinePath, 'w');
@@ -1211,16 +2299,16 @@ classdef QUSConfigurationLogic
                  'Geometría y malla|PML lateral', 'Geometría y malla|CFL', ...
                  'Geometría y malla|Profundidad [m]', 'Medio acústico|Modelo', ...
                  'Medio acústico|Velocidad de sonido [m/s]', 'Medio acústico|Densidad [kg/m^3]', ...
-                 'Medio acústico|Atenuación [dB/(MHz^y cm)]', 'Medio acústico|Desviación de densidad', ...
+                 'Medio acústico|ACS [dB/cm/MHz]', 'Medio acústico|Desviación de densidad', ...
                  'Medio acústico|Alpha power', 'Medio acústico|Modo de absorción', ...
                  'Medio acústico|Velocidad de referencia [m/s]', 'Transductor emisor|Frecuencia [MHz]', ...
                  'Transductor emisor|Amplitud [MPa]', 'Transductor emisor|N.º ciclos', ...
-                 'Transductor emisor|Foco [m]', 'Transductor emisor|Pitch [m]', ...
-                 'Transductor emisor|Ancho [m]', 'Transductor emisor|F-number Tx', ...
-                 'Transductor emisor|F-number Rx', 'Transductor emisor|Líneas de escaneo', ...
-                 'Transductor emisor|Traslación axial [m]', 'Transductor emisor|Traslación lateral [m]', ...
-                 'Transductor emisor|Rotación [rad]', 'Sensor|Factor de directividad', ...
-                 'Sensor|Ángulo de directividad [rad]', 'Cálculo|DataCast', ...
+                 'Transductor emisor|Focal depth [m]', 'Transductor emisor|Pitch [m]', ...
+                 'Transductor emisor|Element width [m]', 'Transductor emisor|Focal number Tx', ...
+                 'Transductor emisor|Focal number Rx', 'Transductor emisor|Number of beams', ...
+                 'Posición|Axial translation [m]', 'Posición|Lateral translation [m]', ...
+                 'Transductor emisor|Factor de directividad de recepción', ...
+                 'Transductor emisor|Ángulo de directividad de recepción [rad]', 'Cálculo|DataCast', ...
                  'Cálculo|PlotSim', 'Cálculo|Solver', 'Reproducibilidad|Semilla global', ...
                  'Reproducibilidad|Semilla base de referencias', 'Reproducibilidad|nRefs de objetivos', ...
                  'Reproducibilidad|nRefs de referencia'}, ...
@@ -1231,8 +2319,9 @@ classdef QUSConfigurationLogic
                  'transducer.frequency', 'transducer.amplitude', 'transducer.cycles', ...
                  'transducer.source_focus', 'transducer.element_pitch', 'transducer.element_width', ...
                  'transducer.focal_number_tx', 'transducer.focal_number_rx', 'transducer.n_lines', ...
-                 'transducer.base_translation_x', 'transducer.base_translation_y', 'transducer.rotation', ...
-                 'sensor.directivity_size_factor', 'sensor.directivity_angle', 'computation.data_cast', ...
+                 'transducer.base_translation_x', 'transducer.base_translation_y', ...
+                 'transducer.receive_directivity_size_factor', ...
+                 'transducer.receive_directivity_angle', 'computation.data_cast', ...
                  'computation.plot_sim_flag', 'computation.solver', 'reproducibility.rng_seed', ...
                  'reproducibility.ref_seed_base', 'reproducibility.n_refs_target', ...
                  'reproducibility.n_refs_reference'});
@@ -1260,6 +2349,12 @@ classdef QUSConfigurationLogic
                 else
                     literal = string(mat2str(value, 16));
                 end
+            elseif iscell(value)
+                elements = strings(1, numel(value));
+                for index = 1:numel(value)
+                    elements(index) = QUSConfigurationLogic.matlabLiteral(value{index});
+                end
+                literal = '{' + strjoin(elements, ', ') + '}';
             else
                 literal = "'" + QUSConfigurationLogic.escapeMatlabText(value) + "'";
             end
@@ -1285,14 +2380,17 @@ classdef QUSConfigurationLogic
             end
         end
         
-        % valores literales que viajarán en el m.
-        % El MAT permanece solo como formato de lectura para Open Config.
-        function values = pipelineCaseValues(parameters, isReference, simulationName)
+        % Valores literales que viajan en el .m y permiten reabrir la GUI.
+        function values = pipelineCaseValues(parameters, isReference, simulationName, configuration)
+            if nargin < 4
+                error('La configuración completa es necesaria para serializar un caso de la GUI.');
+            end
             if isReference
                 nRefs = parameters.nRefsReference;
             else
                 nRefs = parameters.nRefsTarget;
             end
+            mediumFields = QUSConfigurationLogic.mediumPipelineFields(configuration.medium);
             values = struct( ...
                 'isReference', logical(isReference), 'nRefs', nRefs, ...
                 'refSeedBase', parameters.refSeedBase, 'c0', parameters.c0, ...
@@ -1312,7 +2410,50 @@ classdef QUSConfigurationLogic
                 'saveMediumPreviews', parameters.saveMediumPreviews, ...
                 'saveRfPrebeamformed', parameters.saveRfPrebeamformed, ...
                 'directivity_size_factor', parameters.directivity_size_factor, ...
-                'directivity_angle', parameters.directivity_angle, 'solverName', parameters.solverName);
+                'directivity_angle', parameters.directivity_angle, 'solverName', parameters.solverName, ...
+                'rngSeed', configuration.reproducibility.rng_seed, ...
+                'mediumModel', configuration.medium.model, ...
+                'transducerType', configuration.transducer.type, ...
+                'transducerSignal', configuration.transducer.signal, ...
+                'transducerBeamMode', configuration.transducer.beam_mode);
+            fields = fieldnames(mediumFields);
+            for index = 1:numel(fields)
+                values.(fields{index}) = mediumFields.(fields{index});
+            end
+        end
+
+        function fields = mediumPipelineFields(mediumConfiguration)
+            config = mediumConfiguration.config;
+            if ~isfield(config, 'inclusions') || isempty(config.inclusions)
+                config.inclusions = MediumConfigurationLogic.defaultConfig().inclusions;
+            end
+            inclusions = config.inclusions;
+            count = numel(inclusions);
+            fields = struct( ...
+                'inclusionShape', {cell(1, count)}, ...
+                'inclusionCenterMm', zeros(count, 2), ...
+                'inclusionGeometryMm', zeros(count, 2), ...
+                'inclusionAlpha', zeros(1, count), ...
+                'layerThicknessMm', zeros(1, 0), ...
+                'layerAlpha', zeros(1, 0));
+            for index = 1:count
+                item = inclusions(index);
+                fields.inclusionShape{index} = item.shape;
+                fields.inclusionCenterMm(index, :) = item.center_mm;
+                fields.inclusionGeometryMm(index, :) = item.geometry_mm;
+                fields.inclusionAlpha(index) = item.acoustic.acs;
+            end
+            if isfield(config, 'layers') && ~isempty(config.layers)
+                layers = config.layers;
+                layerCount = numel(layers);
+                fields.layerThicknessMm = zeros(1, layerCount);
+                fields.layerAlpha = zeros(1, layerCount);
+                for index = 1:layerCount
+                    item = layers(index);
+                    fields.layerThicknessMm(index) = item.thickness_mm;
+                    fields.layerAlpha(index) = item.acoustic.acs;
+                end
+            end
         end
         
         % Este es solo el formato para que sea lo mas parecido al pipeline
@@ -1329,7 +2470,8 @@ classdef QUSConfigurationLogic
                     cases(index).configuration);
                 values = QUSConfigurationLogic.pipelineCaseValues(scientificParameters, ...
                     cases(index).isReference, ...
-                    QUSConfigurationLogic.materializedSimulationName(cases(index)));
+                    QUSConfigurationLogic.materializedSimulationName(cases(index)), ...
+                    cases(index).configuration);
                 fields = fieldnames(values);
                 lines = [lines; "        case " + index; "            parameters = struct;"];
                 for fieldIndex = 1:numel(fields)
@@ -1348,11 +2490,28 @@ classdef QUSConfigurationLogic
                 "    end"; ...
                 "end"];
         end
+
+        function lines = generatedCaseCatalogFunction(cases, isAlphaSweep)
+            if isAlphaSweep
+                alphaValues = arrayfun(@(item) item.configuration.medium.hom_alpha, cases);
+                refValuesLiteral = QUSConfigurationLogic.matlabLiteral(alphaValues);
+            else
+                refValuesLiteral = "[]";
+            end
+            lines = [ ...
+                "function parametersByCase = getGuiCaseCatalog()"; ...
+                "    refValues = " + refValuesLiteral + ";"; ...
+                "    parametersByCase = getGuiCaseParameters(1, refValues);"; ...
+                "    for caseIndex = 2:" + num2str(numel(cases)); ...
+                "        parametersByCase(caseIndex) = getGuiCaseParameters(caseIndex, refValues);"; ...
+                "    end"; ...
+                "end"];
+        end
         
         %transforma los parámetros de un caso en líneas de código MATLAB listas para escribir en un pipeline.
-        function lines = pipelineLiteralAssignments(parameters, isReference, simulationName)
-            % Conservado para compatibilidad con herramientas internas.
-            values = QUSConfigurationLogic.pipelineCaseValues(parameters, isReference, simulationName);
+        function lines = pipelineLiteralAssignments(parameters, isReference, simulationName, configuration)
+            values = QUSConfigurationLogic.pipelineCaseValues( ...
+                parameters, isReference, simulationName, configuration);
             lines = strings(0, 1);
             fields = fieldnames(values);
             for index = 1:numel(fields)
@@ -1464,13 +2623,14 @@ classdef QUSConfigurationLogic
                 "    rx = kgrid.y;"; ...
                 "    rz = kgrid.x - base_translation(1);"; ...
                 "    figMedium = figure('Units', 'centimeters', 'Position', [5 5 25 10], 'Visible', 'off');"; ...
+                "    colormap(figMedium, turbo(256));"; ...
                 "    tiledlayout(1, 3)"; ...
                 "    nexttile; imagesc(100 * rx(1,:), 100 * rz(:,1), medium.sound_speed);"; ...
                 "    xlabel('x [cm]'); ylabel('z [cm]'); title('Sound speed'); c = colorbar; ylabel(c, 'm/s'); axis image"; ...
                 "    nexttile; imagesc(100 * rx(1,:), 100 * rz(:,1), medium.density);"; ...
                 "    xlabel('x [cm]'); ylabel('z [cm]'); title('Density'); c = colorbar; ylabel(c, 'kg/m^3'); axis image"; ...
-                "    nexttile; imagesc(100 * rx(1,:), 100 * rz(:,1), medium.alpha_coeff, [0.4 1.0]);"; ...
-                "    xlabel('x [cm]'); ylabel('z [cm]'); title('Absorption'); c = colorbar; ylabel(c, 'dB/cm/MHz'); axis image"; ...
+                "    nexttile; imagesc(100 * rx(1,:), 100 * rz(:,1), medium.alpha_coeff, [0.35 1.05]);"; ...
+                "    xlabel('x [cm]'); ylabel('z [cm]'); title('ACS'); c = colorbar; c.Ticks = 0.4:0.1:1.0; c.TickLabels = {'0.4','','0.6','','0.8','','1'}; ylabel(c, 'ACS [dB/cm/MHz]'); axis image"; ...
                 "    sgtitle(sprintf('Homogeneous reference %03d', iRef))"; ...
                 "    savefig(figMedium, fullfile(outputFolder, sprintf('medium_homRef_%03d.fig', iRef)));"; ...
                 "    saveas(figMedium, fullfile(outputFolder, sprintf('medium_homRef_%03d.png', iRef)));"; ...
@@ -1486,14 +2646,78 @@ classdef QUSConfigurationLogic
                 "    medium.sound_speed = c0 * ones(Nx, Ny);"; ...
                 "    medium.density = rho0 .* (1 + densityStd * randn(Nx, Ny));"; ...
                 "    medium.alpha_coeff = alpha * ones(Nx, Ny);"; ...
+                "end"; ""; ...
+                "function medium = makeCircularInclusion(Nx, Ny, dx, baseAxialTranslation, c0, rho0, densityStd, bgAlpha, centerMm, geometryMm, incAlpha)"; ...
+                "    medium = makeHomogeneousDensityOnlyMedium(Nx, Ny, c0, rho0, densityStd, bgAlpha);"; ...
+                "    [zMm, xMm] = mediumCoordinates(Nx, Ny, dx, baseAxialTranslation);"; ...
+                "    if ~isfinite(centerMm(2)), centerMm(2) = mean(zMm(:)); end"; ...
+                "    mask = (xMm - centerMm(1)).^2 + (zMm - centerMm(2)).^2 <= geometryMm(1).^2;"; ...
+                "    medium.alpha_coeff(mask) = incAlpha(1);"; ...
+                "end"; ""; ...
+                "function medium = makeIrregularInclusion(Nx, Ny, dx, baseAxialTranslation, c0, rho0, densityStd, bgAlpha, shape, centerMm, geometryMm, incAlpha)"; ...
+                "    medium = makeHomogeneousDensityOnlyMedium(Nx, Ny, c0, rho0, densityStd, bgAlpha);"; ...
+                "    [zMm, xMm] = mediumCoordinates(Nx, Ny, dx, baseAxialTranslation);"; ...
+                "    if ~isfinite(centerMm(2)), centerMm(2) = mean(zMm(:)); end"; ...
+                "    mask = inclusionMask(xMm, zMm, shape, centerMm, geometryMm);"; ...
+                "    medium.alpha_coeff(mask) = incAlpha;"; ...
+                "end"; ""; ...
+                "function medium = makeMultipleInclusion(Nx, Ny, dx, baseAxialTranslation, c0, rho0, densityStd, bgAlpha, shapes, centersMm, geometriesMm, incAlpha)"; ...
+                "    medium = makeHomogeneousDensityOnlyMedium(Nx, Ny, c0, rho0, densityStd, bgAlpha);"; ...
+                "    [zMm, xMm] = mediumCoordinates(Nx, Ny, dx, baseAxialTranslation);"; ...
+                "    occupied = false(Nx, Ny);"; ...
+                "    for incIndex = 1:numel(incAlpha)"; ...
+                "        centerMm = centersMm(incIndex, :);"; ...
+                "        if ~isfinite(centerMm(2)), centerMm(2) = mean(zMm(:)); end"; ...
+                "        mask = inclusionMask(xMm, zMm, shapes{incIndex}, centerMm, geometriesMm(incIndex, :));"; ...
+                "        if any(mask(:) & occupied(:)), error('Las inclusiones no pueden solaparse.'); end"; ...
+                "        medium.alpha_coeff(mask) = incAlpha(incIndex);"; ...
+                "        occupied = occupied | mask;"; ...
+                "    end"; ...
+                "end"; ""; ...
+                "function medium = makeMultipleLayers(Nx, Ny, dx, baseAxialTranslation, c0, rho0, densityStd, bgAlpha, thicknessMm, layerAlpha)"; ...
+                "    medium = makeHomogeneousDensityOnlyMedium(Nx, Ny, c0, rho0, densityStd, bgAlpha);"; ...
+                "    [zMm, ~] = mediumCoordinates(Nx, Ny, dx, baseAxialTranslation);"; ...
+                "    zFromTransducer = zMm - min(zMm(:));"; ...
+                "    lower = 0;"; ...
+                "    for layerIndex = 1:numel(layerAlpha)"; ...
+                "        upper = lower + thicknessMm(layerIndex);"; ...
+                "        if layerIndex == numel(layerAlpha), mask = zFromTransducer >= lower; else, mask = zFromTransducer >= lower & zFromTransducer < upper; end"; ...
+                "        medium.alpha_coeff(mask) = layerAlpha(layerIndex);"; ...
+                "        lower = upper;"; ...
+                "    end"; ...
+                "end"; ""; ...
+                "function [zMm, xMm] = mediumCoordinates(Nx, Ny, dx, baseAxialTranslation)"; ...
+                "    axialMm = 1e3 .* (((0:Nx-1) - floor(Nx/2)) .* dx - baseAxialTranslation);"; ...
+                "    lateralMm = 1e3 .* ((0:Ny-1) - floor(Ny/2)) .* dx;"; ...
+                "    [zMm, xMm] = ndgrid(axialMm, lateralMm);"; ...
+                "end"; ""; ...
+                "function mask = inclusionMask(xMm, zMm, shape, centerMm, geometryMm)"; ...
+                "    switch lower(char(shape))"; ...
+                "        case 'circle'"; ...
+                "            mask = (xMm - centerMm(1)).^2 + (zMm - centerMm(2)).^2 <= geometryMm(1).^2;"; ...
+                "        case 'ellipse'"; ...
+                "            mask = ((xMm - centerMm(1)) ./ geometryMm(1)).^2 + ((zMm - centerMm(2)) ./ geometryMm(2)).^2 <= 1;"; ...
+                "        case 'rectangle'"; ...
+                "            mask = abs(xMm - centerMm(1)) <= geometryMm(1) / 2 & abs(zMm - centerMm(2)) <= geometryMm(2) / 2;"; ...
+                "        case 'irregular'"; ...
+                "            perturbation = min(max(geometryMm(2), 0), 0.30);"; ...
+                "            theta = atan2(zMm - centerMm(2), xMm - centerMm(1));"; ...
+                "            boundary = geometryMm(1) .* (1 + perturbation .* (0.65 .* cos(3 .* theta) + 0.35 .* sin(5 .* theta)));"; ...
+                "            mask = hypot(xMm - centerMm(1), zMm - centerMm(2)) <= boundary;"; ...
+                "        otherwise"; ...
+                "            error('Forma de inclusión no reconocida: %s', shape);"; ...
+                "    end"; ...
                 "end"];
         end
         
         %Guarda el archivo
         function name = safeFileName(name)
-            name = regexprep(char(name), '[^A-Za-z0-9_-]', '_');
+            name = regexprep(char(name), '[^A-Za-z0-9_]', '_');
             if isempty(name)
                 name = 'qus_benchmark'; %Default
+            end
+            if ~isletter(name(1))
+                name = ['qus_', name];
             end
         end
         

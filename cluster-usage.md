@@ -47,10 +47,14 @@ Ejemplos válidos: `mi_p_qus_baseline.sh` y `mi_m_medium_sweep.sh`.
    operativos, mantenimientos o dudas por el canal de WhatsApp del cluster.
 
 ## Comandos utiles
-- cat script.m: muestra lo que se imprimio en el script
+- sbatch app.sh: para correr el sh
+- cat script.out: muestra lo que se imprimio en el script
 
-- Estado de los worker:
+- Estado de los worker (sacct):
 sacct --allusers --format="JobID,JobName,Partition,State,Elapsed,User,NodeList"
+
+- Cancelar: scancel 8773
+
 
 Para acomodar el ancho de las columnas, usar:
 squeue --format="%.18i %.9P %.25j %.8u %.2t %.10M %.6D %R"
@@ -59,11 +63,20 @@ sacct --allusers --format="JobID,JobName%20,Partition%20,State,Elapsed,User%10,N
  Ahora, en cas de querer ver el estado de los workers en el tiempo puede añadir el comando watch al comando anterior:
 watch -n1 "sacct --allusers --format="JobID,JobName,Partition,State,Elapsed,User,NodeList""
 
-- sbatch app.sh: para correr el sh
-- sacct: para ver lo que ocurre
-
 ## Seguimiento
 
 - hacer "git clone url.git", para traer el codigo o la carpeta o lo que quiera hacer que llegue.
 
 
+## Para obtener los resultados devuelta a mi computadora
+
+mkdir -p ~/Desktop/LIM_project
+
+scp -r misidro@172.19.4.24:/mnt/nfs2/misidro/project/code \
+~/Desktop/LIM_project/
+
+o (para que no se pare el progreso incluso al terminar)
+
+rsync -avh --progress \
+misidro@172.19.4.24:/mnt/nfs2/misidro/project/code/ \
+~/Desktop/LIM_project/code/
