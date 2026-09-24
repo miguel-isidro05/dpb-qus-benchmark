@@ -39,7 +39,7 @@ reference=max([before;after]); if reference==0, reference=1; end
 tiledlayout(2,1,'TileSpacing','compact'); nexttile;
 plot(f/1e6,20*log10(max(before/reference,realmin)), 'Color',[0.4 0.4 0.4]); hold on;
 plot(f/1e6,20*log10(max(after/reference,realmin)),'k');
-xlabel('Frecuencia [MHz]'); ylabel('Amplitud espectral [dB relativos]');
+xlabel('Frecuencia [MHz]'); ylabel('Amplitud espectral [dB]');
 legend('RF con máscara','RF filtrada'); title('Misma ventana y referencia espectral'); grid on; ylim([-100 5]);
 nexttile;
 plot(r.filter.frequency_hz/1e6,r.filter.response,'k');
@@ -71,7 +71,7 @@ function drawBmode(r,image,show,label)
 imagesc(r.x_m*100,r.z_m(show)*100,image(show,:),[-r.config.dynamic_range_db 0]);
 axis image; colormap(gca,gray(256)); xlabel('Lateral [cm]'); ylabel('Axial [cm]');
 title({label,sprintf('Aref = %.4g (ver procedencia en MAT)',r.reference_amplitude)},'Interpreter','none');
-cb=colorbar; ylabel(cb,'dB relativos');
+cb=colorbar; ylabel(cb,'dB');
 if range(r.x_m)/range(r.z_m(show))<0.1, xticks(mean(r.x_m)*100); end
 end
 

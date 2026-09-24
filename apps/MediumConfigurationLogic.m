@@ -100,7 +100,10 @@ classdef MediumConfigurationLogic
                         acs(mask) = item.acoustic.acs;
                     end
                 case 'layers'
-                    lower = min(axialMm);
+                    % Las capas se definen desde la cara del transductor
+                    % (z = 0), igual que el pipeline generado. No se
+                    % desplazan al borde del grid cuando éste incluye margen.
+                    lower = 0;
                     for index = 1:numel(config.layers)
                         layer = config.layers(index);
                         upper = lower + layer.thickness_mm;

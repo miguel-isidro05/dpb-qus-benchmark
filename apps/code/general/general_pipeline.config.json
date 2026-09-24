@@ -1,0 +1,646 @@
+{
+  "schema_version": 2,
+  "record_type": "qus_gui_pipeline",
+  "case_count": 9,
+  "reference_case_index": 1,
+  "cases": [
+    {
+      "isReference": true,
+      "nRefs": 2,
+      "refSeedBase": 50000,
+      "c0": 1540,
+      "rho0": 1060,
+      "hom_alpha": 0.5,
+      "density_std": 0.04,
+      "simuName": "homogeneous_ref",
+      "source_f0": 6.66E+6,
+      "source_amp": 1.0E+6,
+      "source_cycles": 3.5,
+      "source_focus": 0.02,
+      "element_pitch": 0.0003,
+      "element_width": 0.00025,
+      "focal_number_Tx": 2,
+      "focal_number_Rx": 2,
+      "nLines": 64,
+      "grid_size_x": 0.0405,
+      "grid_size_y": 0.03,
+      "base_translation": [
+        -0.020232732732732735,
+        0
+      ],
+      "rotation": 0,
+      "DATA_CAST": "gpuArray-single",
+      "ppw": 6,
+      "depth": 0.04,
+      "cfl": 0.3,
+      "PMLSize": [
+        41,
+        41
+      ],
+      "plotSimFlag": false,
+      "alpha_power": 1,
+      "alpha_mode": "no_dispersion",
+      "sound_speed_ref": 1540,
+      "saveMediumPreviews": true,
+      "saveRfPrebeamformed": true,
+      "directivity_size_factor": 10,
+      "directivity_angle": 0,
+      "solverName": "kspaceFirstoOrder2D",
+      "rngSeed": 23,
+      "mediumModel": "Homogeneo",
+      "transducerType": "Lineal Plano",
+      "transducerSignal": "Tone Burst",
+      "transducerBeamMode": "Focused",
+      "inclusionShape": [
+        "circle"
+      ],
+      "inclusionCenterMm": [
+        0,
+        null
+      ],
+      "inclusionGeometryMm": [
+        7,
+        0
+      ],
+      "inclusionAlpha": 1,
+      "layerThicknessMm": [
+        27.5,
+        27.5
+      ],
+      "layerAlpha": [
+        0.5,
+        1
+      ]
+    },
+    {
+      "isReference": false,
+      "nRefs": 2,
+      "refSeedBase": 50000,
+      "c0": 1540,
+      "rho0": 1060,
+      "hom_alpha": 0.55,
+      "density_std": 0.04,
+      "simuName": "homogeneous_target_case 1",
+      "source_f0": 6.66E+6,
+      "source_amp": 1.0E+6,
+      "source_cycles": 3.5,
+      "source_focus": 0.02,
+      "element_pitch": 0.0003,
+      "element_width": 0.00025,
+      "focal_number_Tx": 2,
+      "focal_number_Rx": 2,
+      "nLines": 64,
+      "grid_size_x": 0.0405,
+      "grid_size_y": 0.03,
+      "base_translation": [
+        -0.020232732732732735,
+        0
+      ],
+      "rotation": 0,
+      "DATA_CAST": "gpuArray-single",
+      "ppw": 6,
+      "depth": 0.04,
+      "cfl": 0.3,
+      "PMLSize": [
+        41,
+        41
+      ],
+      "plotSimFlag": false,
+      "alpha_power": 1,
+      "alpha_mode": "no_dispersion",
+      "sound_speed_ref": 1540,
+      "saveMediumPreviews": true,
+      "saveRfPrebeamformed": true,
+      "directivity_size_factor": 10,
+      "directivity_angle": 0,
+      "solverName": "kspaceFirstoOrder2D",
+      "rngSeed": 23,
+      "mediumModel": "Homogeneo",
+      "transducerType": "Lineal Plano",
+      "transducerSignal": "Tone Burst",
+      "transducerBeamMode": "Focused",
+      "inclusionShape": [
+        "circle"
+      ],
+      "inclusionCenterMm": [
+        0,
+        null
+      ],
+      "inclusionGeometryMm": [
+        7,
+        0
+      ],
+      "inclusionAlpha": 1,
+      "layerThicknessMm": [
+        27.5,
+        27.5
+      ],
+      "layerAlpha": [
+        0.5,
+        1
+      ]
+    },
+    {
+      "isReference": false,
+      "nRefs": 2,
+      "refSeedBase": 50000,
+      "c0": 1540,
+      "rho0": 1060,
+      "hom_alpha": 0.65,
+      "density_std": 0.04,
+      "simuName": "homogeneous_target_case 2",
+      "source_f0": 6.66E+6,
+      "source_amp": 1.0E+6,
+      "source_cycles": 3.5,
+      "source_focus": 0.02,
+      "element_pitch": 0.0003,
+      "element_width": 0.00025,
+      "focal_number_Tx": 2,
+      "focal_number_Rx": 2,
+      "nLines": 64,
+      "grid_size_x": 0.0405,
+      "grid_size_y": 0.03,
+      "base_translation": [
+        -0.020232732732732735,
+        0
+      ],
+      "rotation": 0,
+      "DATA_CAST": "gpuArray-single",
+      "ppw": 6,
+      "depth": 0.04,
+      "cfl": 0.3,
+      "PMLSize": [
+        41,
+        41
+      ],
+      "plotSimFlag": false,
+      "alpha_power": 1,
+      "alpha_mode": "no_dispersion",
+      "sound_speed_ref": 1540,
+      "saveMediumPreviews": true,
+      "saveRfPrebeamformed": true,
+      "directivity_size_factor": 10,
+      "directivity_angle": 0,
+      "solverName": "kspaceFirstoOrder2D",
+      "rngSeed": 23,
+      "mediumModel": "Homogeneo",
+      "transducerType": "Lineal Plano",
+      "transducerSignal": "Tone Burst",
+      "transducerBeamMode": "Focused",
+      "inclusionShape": [
+        "circle"
+      ],
+      "inclusionCenterMm": [
+        0,
+        null
+      ],
+      "inclusionGeometryMm": [
+        7,
+        0
+      ],
+      "inclusionAlpha": 1,
+      "layerThicknessMm": [
+        27.5,
+        27.5
+      ],
+      "layerAlpha": [
+        0.5,
+        1
+      ]
+    },
+    {
+      "isReference": false,
+      "nRefs": 2,
+      "refSeedBase": 50000,
+      "c0": 1540,
+      "rho0": 1060,
+      "hom_alpha": 0.8,
+      "density_std": 0.04,
+      "simuName": "homogeneous_target_case 3",
+      "source_f0": 6.66E+6,
+      "source_amp": 1.0E+6,
+      "source_cycles": 3.5,
+      "source_focus": 0.02,
+      "element_pitch": 0.0003,
+      "element_width": 0.00025,
+      "focal_number_Tx": 2,
+      "focal_number_Rx": 2,
+      "nLines": 64,
+      "grid_size_x": 0.0405,
+      "grid_size_y": 0.03,
+      "base_translation": [
+        -0.020232732732732735,
+        0
+      ],
+      "rotation": 0,
+      "DATA_CAST": "gpuArray-single",
+      "ppw": 6,
+      "depth": 0.04,
+      "cfl": 0.3,
+      "PMLSize": [
+        41,
+        41
+      ],
+      "plotSimFlag": false,
+      "alpha_power": 1,
+      "alpha_mode": "no_dispersion",
+      "sound_speed_ref": 1540,
+      "saveMediumPreviews": true,
+      "saveRfPrebeamformed": true,
+      "directivity_size_factor": 10,
+      "directivity_angle": 0,
+      "solverName": "kspaceFirstoOrder2D",
+      "rngSeed": 23,
+      "mediumModel": "Homogeneo",
+      "transducerType": "Lineal Plano",
+      "transducerSignal": "Tone Burst",
+      "transducerBeamMode": "Focused",
+      "inclusionShape": [
+        "circle"
+      ],
+      "inclusionCenterMm": [
+        0,
+        null
+      ],
+      "inclusionGeometryMm": [
+        7,
+        0
+      ],
+      "inclusionAlpha": 1,
+      "layerThicknessMm": [
+        27.5,
+        27.5
+      ],
+      "layerAlpha": [
+        0.5,
+        1
+      ]
+    },
+    {
+      "isReference": false,
+      "nRefs": 2,
+      "refSeedBase": 50000,
+      "c0": 1540,
+      "rho0": 1060,
+      "hom_alpha": 0.9,
+      "density_std": 0.04,
+      "simuName": "homogeneous_target_case 4",
+      "source_f0": 6.66E+6,
+      "source_amp": 1.0E+6,
+      "source_cycles": 3.5,
+      "source_focus": 0.02,
+      "element_pitch": 0.0003,
+      "element_width": 0.00025,
+      "focal_number_Tx": 2,
+      "focal_number_Rx": 2,
+      "nLines": 64,
+      "grid_size_x": 0.0405,
+      "grid_size_y": 0.03,
+      "base_translation": [
+        -0.020232732732732735,
+        0
+      ],
+      "rotation": 0,
+      "DATA_CAST": "gpuArray-single",
+      "ppw": 6,
+      "depth": 0.04,
+      "cfl": 0.3,
+      "PMLSize": [
+        41,
+        41
+      ],
+      "plotSimFlag": false,
+      "alpha_power": 1,
+      "alpha_mode": "no_dispersion",
+      "sound_speed_ref": 1540,
+      "saveMediumPreviews": true,
+      "saveRfPrebeamformed": true,
+      "directivity_size_factor": 10,
+      "directivity_angle": 0,
+      "solverName": "kspaceFirstoOrder2D",
+      "rngSeed": 23,
+      "mediumModel": "Homogeneo",
+      "transducerType": "Lineal Plano",
+      "transducerSignal": "Tone Burst",
+      "transducerBeamMode": "Focused",
+      "inclusionShape": [
+        "circle"
+      ],
+      "inclusionCenterMm": [
+        0,
+        null
+      ],
+      "inclusionGeometryMm": [
+        7,
+        0
+      ],
+      "inclusionAlpha": 1,
+      "layerThicknessMm": [
+        27.5,
+        27.5
+      ],
+      "layerAlpha": [
+        0.5,
+        1
+      ]
+    },
+    {
+      "isReference": false,
+      "nRefs": 2,
+      "refSeedBase": 50000,
+      "c0": 1540,
+      "rho0": 1060,
+      "hom_alpha": 0.75,
+      "density_std": 0.04,
+      "simuName": "homogeneous_target_case 5",
+      "source_f0": 6.66E+6,
+      "source_amp": 1.0E+6,
+      "source_cycles": 3.5,
+      "source_focus": 0.02,
+      "element_pitch": 0.0003,
+      "element_width": 0.00025,
+      "focal_number_Tx": 2,
+      "focal_number_Rx": 2,
+      "nLines": 64,
+      "grid_size_x": 0.0405,
+      "grid_size_y": 0.03,
+      "base_translation": [
+        -0.020232732732732735,
+        0
+      ],
+      "rotation": 0,
+      "DATA_CAST": "gpuArray-single",
+      "ppw": 6,
+      "depth": 0.04,
+      "cfl": 0.3,
+      "PMLSize": [
+        41,
+        41
+      ],
+      "plotSimFlag": false,
+      "alpha_power": 1,
+      "alpha_mode": "no_dispersion",
+      "sound_speed_ref": 1540,
+      "saveMediumPreviews": true,
+      "saveRfPrebeamformed": true,
+      "directivity_size_factor": 10,
+      "directivity_angle": 0,
+      "solverName": "kspaceFirstoOrder2D",
+      "rngSeed": 23,
+      "mediumModel": "Homogeneo",
+      "transducerType": "Lineal Plano",
+      "transducerSignal": "Tone Burst",
+      "transducerBeamMode": "Focused",
+      "inclusionShape": [
+        "circle"
+      ],
+      "inclusionCenterMm": [
+        0,
+        null
+      ],
+      "inclusionGeometryMm": [
+        7,
+        0
+      ],
+      "inclusionAlpha": 1,
+      "layerThicknessMm": [
+        27.5,
+        27.5
+      ],
+      "layerAlpha": [
+        0.5,
+        1
+      ]
+    },
+    {
+      "isReference": false,
+      "nRefs": 2,
+      "refSeedBase": 50000,
+      "c0": 1540,
+      "rho0": 1060,
+      "hom_alpha": 0.5,
+      "density_std": 0.04,
+      "simuName": "homogeneous_target_case 6",
+      "source_f0": 6.66E+6,
+      "source_amp": 1.0E+6,
+      "source_cycles": 3.5,
+      "source_focus": 0.02,
+      "element_pitch": 0.0003,
+      "element_width": 0.00025,
+      "focal_number_Tx": 2,
+      "focal_number_Rx": 2,
+      "nLines": 64,
+      "grid_size_x": 0.0405,
+      "grid_size_y": 0.03,
+      "base_translation": [
+        -0.020232732732732735,
+        0
+      ],
+      "rotation": 0,
+      "DATA_CAST": "gpuArray-single",
+      "ppw": 6,
+      "depth": 0.04,
+      "cfl": 0.3,
+      "PMLSize": [
+        41,
+        41
+      ],
+      "plotSimFlag": false,
+      "alpha_power": 1,
+      "alpha_mode": "no_dispersion",
+      "sound_speed_ref": 1540,
+      "saveMediumPreviews": true,
+      "saveRfPrebeamformed": true,
+      "directivity_size_factor": 10,
+      "directivity_angle": 0,
+      "solverName": "kspaceFirstoOrder2D",
+      "rngSeed": 23,
+      "mediumModel": "Inclusión circular",
+      "transducerType": "Lineal Plano",
+      "transducerSignal": "Tone Burst",
+      "transducerBeamMode": "Focused",
+      "inclusionShape": [
+        "circle"
+      ],
+      "inclusionCenterMm": [
+        0,
+        null
+      ],
+      "inclusionGeometryMm": [
+        7,
+        0
+      ],
+      "inclusionAlpha": 1,
+      "layerThicknessMm": [
+        27.5,
+        27.5
+      ],
+      "layerAlpha": [
+        0.5,
+        1
+      ]
+    },
+    {
+      "isReference": false,
+      "nRefs": 2,
+      "refSeedBase": 50000,
+      "c0": 1540,
+      "rho0": 1060,
+      "hom_alpha": 0.5,
+      "density_std": 0.04,
+      "simuName": "homogeneous_target_case 7",
+      "source_f0": 6.66E+6,
+      "source_amp": 1.0E+6,
+      "source_cycles": 3.5,
+      "source_focus": 0.02,
+      "element_pitch": 0.0003,
+      "element_width": 0.00025,
+      "focal_number_Tx": 2,
+      "focal_number_Rx": 2,
+      "nLines": 64,
+      "grid_size_x": 0.0405,
+      "grid_size_y": 0.03,
+      "base_translation": [
+        -0.020232732732732735,
+        0
+      ],
+      "rotation": 0,
+      "DATA_CAST": "gpuArray-single",
+      "ppw": 6,
+      "depth": 0.04,
+      "cfl": 0.3,
+      "PMLSize": [
+        41,
+        41
+      ],
+      "plotSimFlag": false,
+      "alpha_power": 1,
+      "alpha_mode": "no_dispersion",
+      "sound_speed_ref": 1540,
+      "saveMediumPreviews": true,
+      "saveRfPrebeamformed": true,
+      "directivity_size_factor": 10,
+      "directivity_angle": 0,
+      "solverName": "kspaceFirstoOrder2D",
+      "rngSeed": 23,
+      "mediumModel": "Medio por capas",
+      "transducerType": "Lineal Plano",
+      "transducerSignal": "Tone Burst",
+      "transducerBeamMode": "Focused",
+      "inclusionShape": [
+        "circle"
+      ],
+      "inclusionCenterMm": [
+        0,
+        null
+      ],
+      "inclusionGeometryMm": [
+        7,
+        0
+      ],
+      "inclusionAlpha": 1,
+      "layerThicknessMm": [
+        20,
+        20
+      ],
+      "layerAlpha": [
+        0.5,
+        1
+      ]
+    },
+    {
+      "isReference": false,
+      "nRefs": 2,
+      "refSeedBase": 50000,
+      "c0": 1540,
+      "rho0": 1060,
+      "hom_alpha": 1,
+      "density_std": 0.04,
+      "simuName": "homogeneous_target_case 8",
+      "source_f0": 6.66E+6,
+      "source_amp": 1.0E+6,
+      "source_cycles": 3.5,
+      "source_focus": 0.02,
+      "element_pitch": 0.0003,
+      "element_width": 0.00025,
+      "focal_number_Tx": 2,
+      "focal_number_Rx": 2,
+      "nLines": 64,
+      "grid_size_x": 0.0405,
+      "grid_size_y": 0.03,
+      "base_translation": [
+        -0.020232732732732735,
+        0
+      ],
+      "rotation": 0,
+      "DATA_CAST": "gpuArray-single",
+      "ppw": 6,
+      "depth": 0.04,
+      "cfl": 0.3,
+      "PMLSize": [
+        41,
+        41
+      ],
+      "plotSimFlag": false,
+      "alpha_power": 1,
+      "alpha_mode": "no_dispersion",
+      "sound_speed_ref": 1540,
+      "saveMediumPreviews": true,
+      "saveRfPrebeamformed": true,
+      "directivity_size_factor": 10,
+      "directivity_angle": 0,
+      "solverName": "kspaceFirstoOrder2D",
+      "rngSeed": 23,
+      "mediumModel": "Múltiples inclusiones",
+      "transducerType": "Lineal Plano",
+      "transducerSignal": "Tone Burst",
+      "transducerBeamMode": "Focused",
+      "inclusionShape": [
+        "circle",
+        "circle",
+        "circle"
+      ],
+      "inclusionCenterMm": [
+        [
+          -7,
+          7
+        ],
+        [
+          5,
+          16
+        ],
+        [
+          -4,
+          30
+        ]
+      ],
+      "inclusionGeometryMm": [
+        [
+          4,
+          0
+        ],
+        [
+          6,
+          0
+        ],
+        [
+          5,
+          0
+        ]
+      ],
+      "inclusionAlpha": [
+        0.5,
+        0.5,
+        1
+      ],
+      "layerThicknessMm": [
+        20,
+        20
+      ],
+      "layerAlpha": [
+        0.5,
+        1
+      ]
+    }
+  ]
+}

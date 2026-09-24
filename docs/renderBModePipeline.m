@@ -58,7 +58,7 @@ function result = renderBModePipeline(matFile, pipelineKind, varargin)
     colormap(gray(256));
     clim([-parser.Results.DynamicRange, 0]);
     colorbarHandle = colorbar;
-    ylabel(colorbarHandle, 'Amplitud [dB relativos]');
+    ylabel(colorbarHandle, 'dB');
     xlabel('Lateral [mm]');
     ylabel('Profundidad [mm]');
     [~, fileName, fileExtension] = fileparts(char(parser.Results.matFile));

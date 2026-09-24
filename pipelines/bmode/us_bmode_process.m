@@ -24,10 +24,32 @@ end
 warnings={};
 if strcmp(kind,'rf_prebf')
     validateFocusedMetadata(d,size(raw,2));
-    [rf,valid,bf]=us_bmode_beamform(raw,d.fs,d.c0,d.source_focus,d.element_pitch);
-    [estimated_zero,blank_auto]=focusedTiming(d,size(raw,2));
-    warnings{end+1}='Foco Rx fijo: precisión fuera del foco no validada.';
-    warnings{end+1}='Origen temporal estimado desde Tx/pulso; requiere reflector conocido para validar eje axial.';
+    [computed_zero,blank_auto]=focusedTiming(d,size(raw,2));
+    if isfield(d, 'time_zero_s') && ~isempty(d.time_zero_s)
+        validateattributes(d.time_zero_s, {'numeric'}, {'real', 'scalar', 'finite', 'nonnegative'});
+        estimated_zero = d.time_zero_s;
+        warnings{end+1} = 'Origen temporal leído del MAT generado por el pipeline.';
+    else
+        estimated_zero = computed_zero;
+        warnings{end+1} = 'Origen temporal inferido desde Tx/pulso; requiere reflector conocido para validarlo.';
+    end
+    receiveFNumber = cfg.receive_f_number;
+    if isempty(receiveFNumber) && isfield(d, 'focal_number_Rx')
+        receiveFNumber = d.focal_number_Rx;
+    end
+    if strcmp(cfg.receive_focus_mode, 'dynamic') && isempty(receiveFNumber)
+        error('us_bmode:Metadata', ...
+            'Rx dinámico requiere focal_number_Rx en el MAT o receive_f_number en las opciones.');
+    end
+    [rf,valid,bf]=us_bmode_beamform(raw,d.fs,d.c0,d.source_focus,d.element_pitch, ...
+        'Mode', cfg.receive_focus_mode, 'FNumber', receiveFNumber, ...
+        'TimeZero', estimated_zero, 'MinElements', cfg.receive_min_elements);
+    if strcmp(cfg.receive_focus_mode, 'dynamic')
+        warnings{end+1}=sprintf(['DAS Rx dinámico con F-number %.3g y mínimo de %d ' ...
+            'elementos.'], receiveFNumber, min(cfg.receive_min_elements, size(raw, 2)));
+    else
+        warnings{end+1}='DAS Rx de foco fijo: precisión fuera del foco no validada.';
+    end
     if isfield(d,'grid_size_y')
         validateattributes(d.grid_size_y,{'numeric'},{'real','scalar','finite','positive'});
         half_width=(size(raw,2)-1)*d.element_pitch/2;
@@ -141,13 +163,20 @@ function [zero,blank]=focusedTiming(d,ne)
 position=((0:ne-1)-(ne-1)/2)*d.element_pitch;
 discrete_delay=round(d.time_delays(:)'*d.fs)/d.fs;
 extra=(sqrt(d.source_focus^2+position.^2)-d.source_focus)/d.c0;
-active=true(1,ne);
-if isfield(d,'focal_number_Tx')
+if isfield(d, 'active_tx_elements')
+    validateattributes(d.active_tx_elements, {'numeric'}, ...
+        {'real', 'scalar', 'finite', 'integer', 'positive'});
+    ntx = d.active_tx_elements;
+elseif isfield(d,'focal_number_Tx')
     ntx=floor(d.source_focus/d.focal_number_Tx/d.element_pitch);
-    inactive=floor((ne-ntx)/2);
-    if ntx<1 || ntx>ne, error('us_bmode:Geometry','Apertura Tx incompatible con canales Rx.'); end
-    active(1:inactive)=false; active(end-inactive+1:end)=false;
+else
+    ntx = ne;
 end
+if ntx<1 || ntx>ne, error('us_bmode:Geometry','Apertura Tx incompatible con canales Rx.'); end
+leftInactive = floor((ne - ntx) / 2);
+rightInactive = ceil((ne - ntx) / 2);
+active = false(1, ne);
+active(leftInactive + 1:ne - rightInactive) = true; % Replica la apertura Tx centrada del pipeline.
 % Centro de la duración discretizada de toneBurst (0:dt:cycles/f0).
 pulse_duration=floor(d.source_cycles/d.source_f0*d.fs)/d.fs;
 zero=median(discrete_delay(active)+extra(active))+pulse_duration/2;

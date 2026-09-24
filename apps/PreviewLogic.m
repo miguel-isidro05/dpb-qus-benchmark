@@ -278,14 +278,14 @@ classdef PreviewLogic
                 mediumConfig, axial * 10, lateral * 10, configuration.rngSeed);
 
             PreviewLogic.drawPropertyMap(handles.soundSpeedAxes, lateral, axial, soundSpeed, ...
-                'Sound speed', 'm/s', []);
+                'Sound speed', 'm/s', [], configuration);
             PreviewLogic.drawPropertyMap(handles.densityAxes, lateral, axial, density, ...
-                'Density', 'kg/m^3', []);
+                'Density', 'kg/m^3', [], configuration);
             PreviewLogic.drawPropertyMap(handles.absorptionAxes, lateral, axial, acs, ...
-                'ACS', 'ACS [dB/cm/MHz]', [0.35, 1.05]);
+                'ACS', 'ACS [dB/cm/MHz]', [0.35, 1.05], configuration);
         end
 
-        function drawPropertyMap(axesHandle, lateral, axial, mediumMap, titleText, colorbarText, limits)
+        function drawPropertyMap(axesHandle, lateral, axial, mediumMap, titleText, colorbarText, limits, configuration)
             cla(axesHandle);
             % showIncomplete oculta el eje; cada redibujado válido debe
             % restaurar sus reglas, marcas y etiquetas dimensionales.
@@ -307,9 +307,26 @@ classdef PreviewLogic
                 colorbarHandle.TickLabels = {'0.4', '', '0.6', '', '0.8', '', '1'};
             end
             title(axesHandle, titleText);
-            
             xlabel(axesHandle, 'x lateral [cm]');
             ylabel(axesHandle, 'z [cm]');
+
+            % Los mapas contienen solamente el medio físico. El marco
+            % discontinuo marca la PML externa que también calcula k-Wave,
+            % de modo que Properties y Geometric comparten el mismo dominio.
+            frame = PreviewLogic.geometryFrame(configuration);
+            hold(axesHandle, 'on');
+            rectangle(axesHandle, 'Position', ...
+                [(frame.lateralMin - frame.pml) * 100, ...
+                 (frame.axialMin - frame.pml) * 100, ...
+                 (frame.lateralSize + 2 * frame.pml) * 100, ...
+                 (frame.axialSize + 2 * frame.pml) * 100], ...
+                'EdgeColor', [0.45 0.45 0.45], 'LineWidth', 1.1, 'LineStyle', '--');
+            rectangle(axesHandle, 'Position', ...
+                [frame.lateralMin * 100, frame.axialMin * 100, ...
+                 frame.lateralSize * 100, frame.axialSize * 100], ...
+                'EdgeColor', [0.15 0.15 0.15], 'LineWidth', 1.3, 'LineStyle', '-');
+            hold(axesHandle, 'off');
+            PreviewLogic.setComputedViewport(axesHandle, frame);
         end
 
         function drawDomain(axesHandle, configuration, showEmitter)
@@ -389,25 +406,35 @@ classdef PreviewLogic
         end
 
         function frame = geometryFrame(configuration)
-            % kWaveGrid está centrado en cero. Este marco cambia el origen
-            % visual a la superficie del transductor, donde z = 0.
-            frame.axialSize = configuration.axialSize;
+            % El dominio numérico de k-Wave está centrado en cero, pero la
+            % interfaz se expresa respecto a la superficie del transductor.
+            % La profundidad configurada define el intervalo físico que se
+            % adquiere: z = 0 en el emisor y z = depth al final de la imagen.
+            % base_translation solo posiciona el array dentro de k-Wave; no
+            % debe desplazar el origen mostrado al usuario.
+            frame.axialSize = configuration.depth;
             frame.lateralSize = configuration.lateralSize;
             frame.pml = configuration.pmlLayers * configuration.dx;
             frame.lateralMin = -configuration.lateralSize / 2;
             frame.lateralMax = configuration.lateralSize / 2;
-            frame.axialMin = -configuration.axialSize / 2 - ...
-                configuration.emitterAxial;
-            frame.axialMax = configuration.axialSize / 2 - ...
-                configuration.emitterAxial;
+            frame.axialMin = 0;
+            frame.axialMax = configuration.depth;
         end
 
         function setGeometryLimits(axesHandle, frame)
+            PreviewLogic.setComputedViewport(axesHandle, frame);
+        end
+
+        function setComputedViewport(axesHandles, frame)
+            % La vista muestra el dominio físico y la PML externa que usa el
+            % solver. Así ninguna pestaña oculta parte de lo que se calcula.
             margin = max(0.002, 0.08 * max(frame.axialSize, frame.lateralSize));
-            xlim(axesHandle, [(frame.lateralMin - frame.pml - margin) * 100, ...
-                (frame.lateralMax + frame.pml + margin) * 100]);
-            ylim(axesHandle, [(frame.axialMin - frame.pml - margin) * 100, ...
-                (frame.axialMax + frame.pml + margin) * 100]);
+            for axesHandle = axesHandles
+                xlim(axesHandle, [(frame.lateralMin - frame.pml - margin) * 100, ...
+                    (frame.lateralMax + frame.pml + margin) * 100]);
+                ylim(axesHandle, [(frame.axialMin - frame.pml - margin) * 100, ...
+                    (frame.axialMax + frame.pml + margin) * 100]);
+            end
         end
 
         function drawSignal(timeAxes, frequencyAxes, configuration)
@@ -425,23 +452,39 @@ classdef PreviewLogic
 
             [time, signal, samplingFrequency] = PreviewLogic.makeToneBurst(configuration);
 
+            time = double(time(:)');
+            signal = double(signal(:)');
+            timeUs = time * 1e6;
+            signalMPa = signal / 1e6;
+            pulseDurationUs = configuration.cycles / configuration.frequency * 1e6;
+            timeMarginUs = max(3 / samplingFrequency * 1e6, 0.08 * pulseDurationUs);
+            peakMPa = max(abs(signalMPa));
+            if peakMPa == 0, peakMPa = configuration.amplitude / 1e6; end
+
             axis(timeAxes, 'on');
             box(timeAxes, 'on');
-            plot(timeAxes, time * 1e6, signal / 1e6, 'Color', [0 0.35 0.75], 'LineWidth', 1.3);
+            hold(timeAxes, 'on');
+            yline(timeAxes, 0, ':', 'Color', [0.4 0.4 0.4]);
+            plot(timeAxes, timeUs, signalMPa, 'Color', [0 0.35 0.75], 'LineWidth', 1.3);
+            hold(timeAxes, 'off');
             grid(timeAxes, 'on');
-            title(timeAxes, sprintf('%s in time', configuration.signalType));
+            title(timeAxes, sprintf('Tone Burst (%.2f MHz, %.1f ciclos)', ...
+                configuration.frequency / 1e6, configuration.cycles));
             xlabel(timeAxes, 'Time [µs]');
             ylabel(timeAxes, 'Pressure [MPa]');
+            xlim(timeAxes, [0, pulseDurationUs + timeMarginUs]);
+            ylim(timeAxes, 1.15 * peakMPa * [-1, 1]);
 
             signalLength = numel(signal);
-            spectrumTwoSided = abs(fft(signal) / signalLength);
-            spectrum = spectrumTwoSided(1:floor(signalLength / 2) + 1);
-            if rem(signalLength, 2) == 0
+            spectrumLength = 2^nextpow2(max(2048, 16 * signalLength));
+            spectrumTwoSided = abs(fft(signal, spectrumLength) / signalLength);
+            spectrum = spectrumTwoSided(1:floor(spectrumLength / 2) + 1);
+            if rem(spectrumLength, 2) == 0
                 spectrum(2:end - 1) = 2 * spectrum(2:end - 1);
             else
                 spectrum(2:end) = 2 * spectrum(2:end);
             end
-            frequencyAxis = samplingFrequency * (0:floor(signalLength / 2)) / signalLength;
+            frequencyAxis = samplingFrequency * (0:floor(spectrumLength / 2)) / spectrumLength;
             axis(frequencyAxes, 'on');
             box(frequencyAxes, 'on');
             plot(frequencyAxes, frequencyAxis / 1e6, spectrum / 1e6, ...

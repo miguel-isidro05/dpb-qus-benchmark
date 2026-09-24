@@ -25,7 +25,7 @@ for start=1:per_page:numel(successful)
         else
             subtitle_label=sprintf('ancho = %.3g cm',range(r.x_m)*100);
         end
-        title({label,subtitle_label},'Interpreter','none'); cb=colorbar; ylabel(cb,'dB relativos');
+        title({label,subtitle_label},'Interpreter','none'); cb=colorbar; ylabel(cb,'dB');
         if range(r.x_m)/range(r.z_m(show))<0.1, xticks(mean(r.x_m)*100); end
     end
     sgtitle(sprintf('B-mode sin TGC; referencia común %.4g; página %d',summary.reference_amplitude,ceil(start/per_page)), 'Interpreter','none');
