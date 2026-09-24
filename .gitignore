@@ -1,2 +1,8 @@
 .DS_Store
 /apps/code/*/out/
+
+# Resultados generados localmente: se pueden regenerar desde los pipelines.
+/docs/EX_2_FAILED/
+/docs/EXP_1_RESULTS/
+/docs/EXP1_RESULTS/
+/docs/EXP_2_RESULTS/
